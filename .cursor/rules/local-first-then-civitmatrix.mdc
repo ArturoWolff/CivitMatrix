@@ -1,0 +1,27 @@
+---
+description: Features must be proven on local private tooling before landing in this repo
+alwaysApply: true
+---
+
+# Local-first → promote to this repo
+
+## Order of work
+
+1. Build/try the feature in the **private local runner** (`../anima-lora-batch/` or equivalent), not here first.
+2. Confirm it works (skip/download/retry, SM sidecars, etc.).
+3. **Carry over** a scrubbed, generalized version into this `civitmatrix/` tree.
+4. Re-test the public copy, then commit and push to `ArturoWolff/civitmatrix`.
+
+## Hard rules
+
+- Never commit secrets, personal absolute paths, `.env`, logs, or weights.
+- Prefer promoting stable behavior over half-finished experiments.
+- Docs-only or explicit “do it in civitmatrix” requests are the exception.
+- UI work still follows the Win95 browser rule once promoted here.
+
+## Checklist before push
+
+- [ ] Proven locally  
+- [ ] No private paths/keys in the diff  
+- [ ] CLI/env stays portable (Linux/macOS/Windows)  
+- [ ] Smoke-tested from this folder (`python -m civitmatrix --help` / dry-run as relevant)
