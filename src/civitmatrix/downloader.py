@@ -13,6 +13,7 @@ from civitmatrix.indexer import (
     pick_primary_file,
     unique_stem,
 )
+from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 
@@ -200,6 +201,15 @@ def run_batch(
     retry_failed: bool,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
+    job = JobState(logger.job_path)
+    job.set_meta(
+        dryRun=bool(dry_run),
+        baseModel=base_model,
+        modelType=model_type,
+        sort=sort,
+        outDir=str(out_dir),
+    )
+
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     logger.log(
         f"Local index: {len(local_blake3)} blake3, {len(local_versions)} versions, "
@@ -207,79 +217,100 @@ def run_batch(
     )
 
     models: list[dict[str, Any]] = []
-    if retry_failed:
-        ids = logger.load_failed_model_ids()
-        logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
-        import time
+    try:
+        job.set_phase("listing")
+        if retry_failed:
+            ids = logger.load_failed_model_ids()
+            logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
+            import time
 
-        for mid in ids:
-            try:
-                models.append(client.get_model(mid))
-            except Exception as e:
-                logger.record_failure(
-                    {"id": mid, "name": None},
-                    "retry_fetch_failed",
-                    extra={"detail": repr(e)},
-                )
-            time.sleep(0.2)
-    else:
-        logger.log(
-            f"Listing {model_type} for base={base_model!r} sort={sort!r} from {client.base_url} …"
-        )
-        for i, model in enumerate(
-            client.iter_models(
-                base_model=base_model,
-                model_type=model_type,
-                nsfw=nsfw,
-                sort=sort,
-            ),
-            1,
-        ):
-            models.append(model)
-            if limit and i >= limit:
-                break
-            if i % 50 == 0:
-                logger.log(f"Listed {i} models…")
-
-    logger.log(
-        f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
-    )
-    counts: dict[str, int] = {}
-
-    def worker(model: dict[str, Any]) -> str:
-        return process_one(
-            client,
-            model,
-            out_dir,
-            local_blake3,
-            local_versions,
-            local_stems,
-            logger,
-            base_model=base_model,
-            match_base_version=match_base_version,
-            dry_run=dry_run,
-        )
-
-    if concurrency <= 1:
-        for model in models:
-            status = worker(model)
-            counts[status] = counts.get(status, 0) + 1
-    else:
-        with ThreadPoolExecutor(max_workers=concurrency) as ex:
-            futs = {ex.submit(worker, m): m for m in models}
-            for fut in as_completed(futs):
+            for mid in ids:
                 try:
-                    status = fut.result()
+                    models.append(client.get_model(mid))
                 except Exception as e:
-                    m = futs[fut]
-                    logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
-                    status = "error"
-                counts[status] = counts.get(status, 0) + 1
+                    logger.record_failure(
+                        {"id": mid, "name": None},
+                        "retry_fetch_failed",
+                        extra={"detail": repr(e)},
+                    )
+                time.sleep(0.2)
+            job.set_count("listed", len(models))
+        else:
+            logger.log(
+                f"Listing {model_type} for base={base_model!r} sort={sort!r} "
+                f"from {client.base_url} …"
+            )
+            for i, model in enumerate(
+                client.iter_models(
+                    base_model=base_model,
+                    model_type=model_type,
+                    nsfw=nsfw,
+                    sort=sort,
+                ),
+                1,
+            ):
+                models.append(model)
+                if i % 50 == 0:
+                    job.set_count("listed", i)
+                    logger.log(f"Listed {i} models…")
+                if limit and i >= limit:
+                    break
+            job.set_count("listed", len(models))
 
-    logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
-    logger.log(f"Failures -> {logger.failed_path}")
-    logger.log(f"Manifest -> {logger.manifest_path}")
-    logger.log(
-        "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
-    )
-    return 0
+        logger.log(
+            f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
+        )
+        job.set_phase("downloading")
+        job.set_count("total", len(models))
+        counts: dict[str, int] = {}
+        counts_lock = threading.Lock()
+
+        def worker(model: dict[str, Any]) -> str:
+            job.set_current(model)
+            status = process_one(
+                client,
+                model,
+                out_dir,
+                local_blake3,
+                local_versions,
+                local_stems,
+                logger,
+                base_model=base_model,
+                match_base_version=match_base_version,
+                dry_run=dry_run,
+            )
+            with counts_lock:
+                counts[status] = counts.get(status, 0) + 1
+                job.set_count(status, counts[status])
+                job.set_count("processed", sum(counts.values()))
+            return status
+
+        if concurrency <= 1:
+            for model in models:
+                worker(model)
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency) as ex:
+                futs = {ex.submit(worker, m): m for m in models}
+                for fut in as_completed(futs):
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        m = futs[fut]
+                        logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
+                        with counts_lock:
+                            counts["error"] = counts.get("error", 0) + 1
+                            job.set_count("error", counts["error"])
+                            job.set_count("processed", sum(counts.values()))
+
+        job.set_phase("done")
+        logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
+        logger.log(f"Failures -> {logger.failed_path}")
+        logger.log(f"Manifest -> {logger.manifest_path}")
+        logger.log(f"Job status -> {logger.job_path}")
+        logger.log(
+            "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
+        )
+        return 0
+    except Exception:
+        job.set_phase("error")
+        raise

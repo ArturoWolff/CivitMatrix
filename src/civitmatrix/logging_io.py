@@ -20,6 +20,7 @@ class RunLogger:
         self.failed_path = log_dir / "failed.jsonl"
         self.manifest_path = log_dir / "manifest.jsonl"
         self.run_log_path = log_dir / "run.log"
+        self.job_path = log_dir / "job.json"
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def log(self, msg: str) -> None:
