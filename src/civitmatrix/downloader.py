@@ -20,6 +20,17 @@ from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 _index_lock = threading.Lock()
 
 
+def _model_fields(model: dict[str, Any], version: dict[str, Any] | None = None) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "modelId": model.get("id"),
+        "modelName": model.get("name"),
+    }
+    if version is not None:
+        fields["versionId"] = version.get("id")
+        fields["baseModel"] = version.get("baseModel")
+    return fields
+
+
 def process_one(
     client: CivitClient,
     model: dict[str, Any],
@@ -32,6 +43,7 @@ def process_one(
     base_model: str,
     match_base_version: bool,
     dry_run: bool,
+    job: JobState | None = None,
 ) -> str:
     version = pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -43,19 +55,37 @@ def process_one(
             retryable=False,
             extra={"wantedBaseModel": base_model},
         )
+        if job:
+            job.emit(
+                "fail",
+                reason="no_matching_base_version",
+                retryable=False,
+                **_model_fields(model),
+            )
         return "no_match"
 
     file_info = pick_primary_file(version)
     if not file_info:
         logger.record_failure(model, "no_files", retryable=False, version=version)
+        if job:
+            job.emit(
+                "fail",
+                reason="no_files",
+                retryable=False,
+                **_model_fields(model, version),
+            )
         return "no_files"
 
     blake3 = (file_info.get("hashes") or {}).get("BLAKE3")
     version_id = int(version["id"])
     with _index_lock:
         if blake3 and blake3.upper() in local_blake3:
+            if job:
+                job.emit("skip_hash", blake3=blake3, **_model_fields(model, version))
             return "skip_hash"
         if version_id in local_versions:
+            if job:
+                job.emit("skip_version", **_model_fields(model, version))
             return "skip_version"
         remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
         stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
@@ -87,10 +117,24 @@ def process_one(
         logger.log(
             f"DRY-RUN would download model={model['id']} ver={version_id} -> {weight_path.name}"
         )
+        if job:
+            job.emit(
+                "dry_run",
+                localStem=stem,
+                remoteFileName=remote_name,
+                **_model_fields(model, version),
+            )
         return "dry_run"
 
     try:
         logger.log(f"DOWNLOAD model={model['id']} ver={version_id} -> {weight_path.name}")
+        if job:
+            job.emit(
+                "download_start",
+                localStem=stem,
+                remoteFileName=remote_name,
+                **_model_fields(model, version),
+            )
         client.download(download_url, weight_path)
         if preview_url:
             try:
@@ -126,6 +170,14 @@ def process_one(
                 "sortHints": sort_hints_from_tags(model.get("tags") or []),
             },
         )
+        if job:
+            job.emit(
+                "download_ok",
+                localStem=stem,
+                blake3=blake3,
+                weightPath=str(weight_path),
+                **_model_fields(model, version),
+            )
         return "ok"
     except PermissionError as e:
         _release_reservation(
@@ -138,6 +190,14 @@ def process_one(
             version=version,
             extra={"detail": str(e), "downloadUrl": download_url},
         )
+        if job:
+            job.emit(
+                "fail",
+                reason="forbidden_or_early_access",
+                retryable=True,
+                detail=str(e),
+                **_model_fields(model, version),
+            )
         weight_path.unlink(missing_ok=True)
         return "forbidden"
     except FileNotFoundError as e:
@@ -151,6 +211,14 @@ def process_one(
             version=version,
             extra={"detail": str(e)},
         )
+        if job:
+            job.emit(
+                "fail",
+                reason="not_found",
+                retryable=False,
+                detail=str(e),
+                **_model_fields(model, version),
+            )
         weight_path.unlink(missing_ok=True)
         return "not_found"
     except Exception as e:
@@ -164,6 +232,14 @@ def process_one(
             version=version,
             extra={"detail": repr(e), "downloadUrl": download_url},
         )
+        if job:
+            job.emit(
+                "fail",
+                reason="download_error",
+                retryable=True,
+                detail=repr(e),
+                **_model_fields(model, version),
+            )
         weight_path.unlink(missing_ok=True)
         info_path.unlink(missing_ok=True)
         preview_path.unlink(missing_ok=True)
@@ -252,10 +328,12 @@ def run_batch(
                 models.append(model)
                 if i % 50 == 0:
                     job.set_count("listed", i)
+                    job.emit("listing_progress", listed=i)
                     logger.log(f"Listed {i} models…")
                 if limit and i >= limit:
                     break
             job.set_count("listed", len(models))
+            job.emit("listing_done", listed=len(models))
 
         logger.log(
             f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
@@ -278,6 +356,7 @@ def run_batch(
                 base_model=base_model,
                 match_base_version=match_base_version,
                 dry_run=dry_run,
+                job=job,
             )
             with counts_lock:
                 counts[status] = counts.get(status, 0) + 1
@@ -297,20 +376,31 @@ def run_batch(
                     except Exception as e:
                         m = futs[fut]
                         logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
+                        job.emit(
+                            "fail",
+                            reason="worker_crash",
+                            retryable=True,
+                            detail=repr(e),
+                            modelId=m.get("id"),
+                            modelName=m.get("name"),
+                        )
                         with counts_lock:
                             counts["error"] = counts.get("error", 0) + 1
                             job.set_count("error", counts["error"])
                             job.set_count("processed", sum(counts.values()))
 
+        job.emit("run_done", counts=dict(counts))
         job.set_phase("done")
         logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
         logger.log(f"Failures -> {logger.failed_path}")
         logger.log(f"Manifest -> {logger.manifest_path}")
         logger.log(f"Job status -> {logger.job_path}")
+        logger.log(f"Events -> {job.events_path}")
         logger.log(
             "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
         )
         return 0
     except Exception:
+        job.emit("run_error")
         job.set_phase("error")
         raise
