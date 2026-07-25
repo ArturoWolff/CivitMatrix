@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -15,6 +16,7 @@ from civitmatrix.indexer import (
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 
 _index_lock = threading.Lock()
@@ -286,6 +288,17 @@ def run_batch(
         outDir=str(out_dir),
     )
 
+    try:
+        lock = RunLock.acquire(out_dir, job.run_id)
+    except RunLockError as e:
+        job.emit("lock_denied", detail=str(e), **e.lock_info)
+        job.set_phase("error")
+        logger.log(f"ERROR: {e}")
+        return 3
+
+    job.emit("lock_acquired", lockPath=str(lock.path), pid=os.getpid())
+    job.set_meta(lockPath=str(lock.path))
+
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     logger.log(
         f"Local index: {len(local_blake3)} blake3, {len(local_versions)} versions, "
@@ -404,3 +417,6 @@ def run_batch(
         job.emit("run_error")
         job.set_phase("error")
         raise
+    finally:
+        lock.release()
+        job.emit("lock_released", lockPath=str(lock.path))

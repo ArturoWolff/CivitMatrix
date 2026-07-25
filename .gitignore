@@ -38,6 +38,7 @@ downloads/
 *.preview.jpeg
 *.preview.png
 *.preview.webp
+.civitmatrix.lock
 
 # OS / editor
 .DS_Store
