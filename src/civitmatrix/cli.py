@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from civitmatrix import __version__
+from civitmatrix.client import CivitClient
+from civitmatrix.downloader import run_batch
+from civitmatrix.logging_io import RunLogger
+
+SORT_CHOICES = [
+    "Highest Rated",
+    "Most Downloaded",
+    "Newest",
+    "Most Liked",
+    "Most Discussed",
+    "Most Collected",
+    "Most Buzz",
+]
+
+TYPE_CHOICES = [
+    "Checkpoint",
+    "TextualInversion",
+    "Hypernetwork",
+    "AestheticGradient",
+    "LORA",
+    "LoCon",
+    "DoRA",
+    "Controlnet",
+    "Upscaler",
+    "MotionModule",
+    "VAE",
+    "Poses",
+    "Wildcards",
+    "Workflows",
+    "Other",
+]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="civitmatrix",
+        description=(
+            "Batch-download CivitAI models with Stability Matrix–native sidecars "
+            "(.safetensors + .cm-info.json + preview) so SM shows Installed."
+        ),
+    )
+    p.add_argument("--version", action="version", version=f"civitmatrix {__version__}")
+    p.add_argument("--dry-run", action="store_true", help="List actions without downloading")
+    p.add_argument("--limit", type=int, default=0, help="Max models to process (0 = all)")
+    p.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Only retry retryable entries from logs/failed.jsonl",
+    )
+    p.add_argument("--concurrency", type=int, default=0, help="Override MAX_CONCURRENT")
+    p.add_argument(
+        "--base-model",
+        default=None,
+        help="CivitAI base model filter (default: env BASE_MODEL or Anima)",
+    )
+    p.add_argument(
+        "--type",
+        dest="model_type",
+        default=None,
+        choices=TYPE_CHOICES,
+        help="CivitAI model type (default: env MODEL_TYPE or LORA)",
+    )
+    p.add_argument(
+        "--sort",
+        default=None,
+        choices=SORT_CHOICES,
+        help="Listing sort order (default: env SORT or Highest Rated)",
+    )
+    p.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: env LORA_DIR or ./downloads/Lora)",
+    )
+    p.add_argument(
+        "--nsfw",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include NSFW results (default: env NSFW or true)",
+    )
+    p.add_argument(
+        "--match-base-version",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Download newest version matching --base-model "
+            "(default: env MATCH_BASE_VERSION or true)"
+        ),
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Prefer config next to where the user runs the tool (repo clone / working dir)
+    root = Path.cwd()
+    load_dotenv(root / ".env")
+    load_dotenv()  # also allow exported env vars / parent .env
+    args = build_parser().parse_args(argv)
+
+    api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
+    logger = RunLogger(root / "logs")
+    if not api_key:
+        logger.log("ERROR: CIVITAI_API_KEY missing — copy .env.example to .env and set your key")
+        return 2
+
+    base_url = os.environ.get("CIVITAI_BASE_URL", "https://civitai.red").rstrip("/")
+    base_model = args.base_model or os.environ.get("BASE_MODEL", "Anima")
+    model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
+    sort = args.sort or os.environ.get("SORT", "Highest Rated")
+    out_dir = Path(args.out or os.environ.get("LORA_DIR", "./downloads/Lora")).expanduser()
+    if not out_dir.is_absolute():
+        out_dir = (root / out_dir).resolve()
+    concurrency = args.concurrency or int(os.environ.get("MAX_CONCURRENT", "2"))
+    nsfw = args.nsfw if args.nsfw is not None else _env_bool("NSFW", True)
+    match_base = (
+        args.match_base_version
+        if args.match_base_version is not None
+        else _env_bool("MATCH_BASE_VERSION", True)
+    )
+
+    client = CivitClient(base_url, api_key)
+    return run_batch(
+        client=client,
+        out_dir=out_dir,
+        logger=logger,
+        base_model=base_model,
+        model_type=model_type,
+        sort=sort,
+        nsfw=nsfw,
+        match_base_version=match_base,
+        concurrency=concurrency,
+        dry_run=args.dry_run,
+        limit=args.limit,
+        retry_failed=args.retry_failed,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

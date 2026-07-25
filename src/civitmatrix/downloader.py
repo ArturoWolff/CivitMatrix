@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
+
+from civitmatrix.client import CivitClient
+from civitmatrix.indexer import (
+    load_local_index,
+    pick_matching_version,
+    pick_primary_file,
+    unique_stem,
+)
+from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
+
+_index_lock = threading.Lock()
+
+
+def process_one(
+    client: CivitClient,
+    model: dict[str, Any],
+    out_dir: Path,
+    local_blake3: set[str],
+    local_versions: set[int],
+    local_stems: set[str],
+    logger: RunLogger,
+    *,
+    base_model: str,
+    match_base_version: bool,
+    dry_run: bool,
+) -> str:
+    version = pick_matching_version(
+        model, base_model, match_base_version=match_base_version
+    )
+    if not version:
+        logger.record_failure(
+            model,
+            "no_matching_base_version",
+            retryable=False,
+            extra={"wantedBaseModel": base_model},
+        )
+        return "no_match"
+
+    file_info = pick_primary_file(version)
+    if not file_info:
+        logger.record_failure(model, "no_files", retryable=False, version=version)
+        return "no_files"
+
+    blake3 = (file_info.get("hashes") or {}).get("BLAKE3")
+    version_id = int(version["id"])
+    with _index_lock:
+        if blake3 and blake3.upper() in local_blake3:
+            return "skip_hash"
+        if version_id in local_versions:
+            return "skip_version"
+        remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
+        stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
+        local_stems.add(stem.lower())
+        local_versions.add(version_id)
+        if blake3:
+            local_blake3.add(blake3.upper())
+
+    weight_path = out_dir / f"{stem}.safetensors"
+    info_path = out_dir / f"{stem}.cm-info.json"
+    preview_path = out_dir / f"{stem}.preview.jpeg"
+
+    download_url = file_info.get("downloadUrl") or (
+        f"{client.base_url}/api/download/models/{version_id}"
+    )
+
+    preview_url = None
+    for img in version.get("images") or []:
+        u = img.get("url")
+        if u:
+            preview_url = u
+            break
+
+    tags = [
+        t if isinstance(t, str) else t.get("name") for t in (model.get("tags") or [])
+    ]
+
+    if dry_run:
+        logger.log(
+            f"DRY-RUN would download model={model['id']} ver={version_id} -> {weight_path.name}"
+        )
+        return "dry_run"
+
+    try:
+        logger.log(f"DOWNLOAD model={model['id']} ver={version_id} -> {weight_path.name}")
+        client.download(download_url, weight_path)
+        if preview_url:
+            try:
+                client.download(preview_url, preview_path)
+            except Exception as e:
+                logger.log(f"WARN preview failed model={model['id']}: {e}")
+
+        cm = build_cm_info(model, version, file_info, stem, out_dir)
+        if preview_path.exists():
+            cm["ThumbnailImageUrl"] = str(preview_path)
+        info_path.write_text(json.dumps(cm, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        logger.append_jsonl(
+            logger.manifest_path,
+            {
+                "ts": utc_now(),
+                "status": "ok",
+                "modelId": model.get("id"),
+                "modelName": model.get("name"),
+                "versionId": version_id,
+                "versionName": version.get("name"),
+                "baseModel": version.get("baseModel"),
+                "blake3": blake3,
+                "remoteFileName": remote_name,
+                "localStem": stem,
+                "weightPath": str(weight_path),
+                "infoPath": str(info_path),
+                "previewPath": str(preview_path) if preview_path.exists() else None,
+                "tags": [t for t in tags if t],
+                "nsfw": model.get("nsfw"),
+                "nsfwLevel": model.get("nsfwLevel"),
+                "creator": (model.get("creator") or {}).get("username"),
+                "sortHints": sort_hints_from_tags(model.get("tags") or []),
+            },
+        )
+        return "ok"
+    except PermissionError as e:
+        _release_reservation(
+            local_blake3, local_versions, local_stems, blake3, version_id, stem
+        )
+        logger.record_failure(
+            model,
+            "forbidden_or_early_access",
+            retryable=True,
+            version=version,
+            extra={"detail": str(e), "downloadUrl": download_url},
+        )
+        weight_path.unlink(missing_ok=True)
+        return "forbidden"
+    except FileNotFoundError as e:
+        _release_reservation(
+            local_blake3, local_versions, local_stems, blake3, version_id, stem
+        )
+        logger.record_failure(
+            model,
+            "not_found",
+            retryable=False,
+            version=version,
+            extra={"detail": str(e)},
+        )
+        weight_path.unlink(missing_ok=True)
+        return "not_found"
+    except Exception as e:
+        _release_reservation(
+            local_blake3, local_versions, local_stems, blake3, version_id, stem
+        )
+        logger.record_failure(
+            model,
+            "download_error",
+            retryable=True,
+            version=version,
+            extra={"detail": repr(e), "downloadUrl": download_url},
+        )
+        weight_path.unlink(missing_ok=True)
+        info_path.unlink(missing_ok=True)
+        preview_path.unlink(missing_ok=True)
+        return "error"
+
+
+def _release_reservation(
+    local_blake3: set[str],
+    local_versions: set[int],
+    local_stems: set[str],
+    blake3: str | None,
+    version_id: int,
+    stem: str,
+) -> None:
+    with _index_lock:
+        local_stems.discard(stem.lower())
+        local_versions.discard(version_id)
+        if blake3:
+            local_blake3.discard(blake3.upper())
+
+
+def run_batch(
+    *,
+    client: CivitClient,
+    out_dir: Path,
+    logger: RunLogger,
+    base_model: str,
+    model_type: str,
+    sort: str,
+    nsfw: bool,
+    match_base_version: bool,
+    concurrency: int,
+    dry_run: bool,
+    limit: int,
+    retry_failed: bool,
+) -> int:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    local_blake3, local_versions, local_stems = load_local_index(out_dir)
+    logger.log(
+        f"Local index: {len(local_blake3)} blake3, {len(local_versions)} versions, "
+        f"{len(local_stems)} stems under {out_dir}"
+    )
+
+    models: list[dict[str, Any]] = []
+    if retry_failed:
+        ids = logger.load_failed_model_ids()
+        logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
+        import time
+
+        for mid in ids:
+            try:
+                models.append(client.get_model(mid))
+            except Exception as e:
+                logger.record_failure(
+                    {"id": mid, "name": None},
+                    "retry_fetch_failed",
+                    extra={"detail": repr(e)},
+                )
+            time.sleep(0.2)
+    else:
+        logger.log(
+            f"Listing {model_type} for base={base_model!r} sort={sort!r} from {client.base_url} …"
+        )
+        for i, model in enumerate(
+            client.iter_models(
+                base_model=base_model,
+                model_type=model_type,
+                nsfw=nsfw,
+                sort=sort,
+            ),
+            1,
+        ):
+            models.append(model)
+            if limit and i >= limit:
+                break
+            if i % 50 == 0:
+                logger.log(f"Listed {i} models…")
+
+    logger.log(
+        f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
+    )
+    counts: dict[str, int] = {}
+
+    def worker(model: dict[str, Any]) -> str:
+        return process_one(
+            client,
+            model,
+            out_dir,
+            local_blake3,
+            local_versions,
+            local_stems,
+            logger,
+            base_model=base_model,
+            match_base_version=match_base_version,
+            dry_run=dry_run,
+        )
+
+    if concurrency <= 1:
+        for model in models:
+            status = worker(model)
+            counts[status] = counts.get(status, 0) + 1
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as ex:
+            futs = {ex.submit(worker, m): m for m in models}
+            for fut in as_completed(futs):
+                try:
+                    status = fut.result()
+                except Exception as e:
+                    m = futs[fut]
+                    logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
+                    status = "error"
+                counts[status] = counts.get(status, 0) + 1
+
+    logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
+    logger.log(f"Failures -> {logger.failed_path}")
+    logger.log(f"Manifest -> {logger.manifest_path}")
+    logger.log(
+        "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
+    )
+    return 0

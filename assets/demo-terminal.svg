@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-label="CivitMatrix terminal demo">
+  <defs>
+    <linearGradient id="termBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#121926"/>
+      <stop offset="100%" stop-color="#0a101a"/>
+    </linearGradient>
+  </defs>
+  <rect width="920" height="420" rx="16" fill="url(#termBg)" stroke="#243247"/>
+  <circle cx="36" cy="28" r="7" fill="#ff5f57"/>
+  <circle cx="58" cy="28" r="7" fill="#febc2e"/>
+  <circle cx="80" cy="28" r="7" fill="#28c840"/>
+  <text x="110" y="33" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13" fill="#6f849e">civitmatrix  batch · resume · SM sidecars</text>
+  <text x="28" y="80" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#8ea0b8">$ ./run.sh --base-model Anima --type LORA --limit 5</text>
+  <text x="28" y="118" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#3ecbff">: Local index: 204 blake3 · 203 versions</text>
+  <text x="28" y="148" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#c5d2e3">: Listing LORA for base='Anima' sort='Highest Rated' &</text>
+  <text x="28" y="178" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#2ee6a6"> skip_hash ×4</text>
+  <text x="28" y="208" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#f4f7fb">“ DOWNLOAD model=2620171 ’ background_detailer_v1.safetensors</text>
+  <text x="28" y="238" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#2ee6a6"> wrote .cm-info.json + .preview.jpeg</text>
+  <text x="28" y="278" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#c5d2e3">Done. Counts: {"ok":1,"skip_hash":4}</text>
+  <text x="28" y="308" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#8ea0b8">Failures ’ logs/failed.jsonl</text>
+  <text x="28" y="338" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#8ea0b8">Manifest ’ logs/manifest.jsonl</text>
+  <text x="28" y="378" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="15" fill="#febc2e">» Refresh Stability Matrix index ’ green Installed</text>
+</svg>

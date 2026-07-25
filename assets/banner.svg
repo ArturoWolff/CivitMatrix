@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="CivitMatrix">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="55%" stop-color="#101a2e"/>
+      <stop offset="100%" stop-color="#061018"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2ee6a6"/>
+      <stop offset="100%" stop-color="#3ecbff"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1d2a44" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="320" fill="url(#bg)"/>
+  <rect width="1200" height="320" fill="url(#grid)" opacity="0.55"/>
+  <circle cx="980" cy="70" r="120" fill="#2ee6a6" opacity="0.08"/>
+  <circle cx="1080" cy="240" r="160" fill="#3ecbff" opacity="0.07"/>
+  <rect x="48" y="48" width="6" height="224" rx="3" fill="url(#accent)"/>
+  <text x="80" y="130" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="64" font-weight="700" fill="#f4f7fb">CivitMatrix</text>
+  <text x="84" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" fill="#8ea0b8">CivitAI batch downloads · Stability Matrix native</text>
+  <rect x="84" y="210" width="220" height="36" rx="8" fill="#122033" stroke="#2ee6a6" stroke-width="1.5"/>
+  <text x="100" y="234" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" fill="#2ee6a6">Ï INSTALLED · BLAKE3</text>
+  <text x="330" y="234" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" fill="#6f849e">.safetensors + .cm-info.json + preview</text>
+</svg>

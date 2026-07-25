@@ -1,0 +1,38 @@
+# Secrets & local config
+.env
+.env.local
+.env.*.local
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime outputs
+logs/*.jsonl
+logs/*.log
+!logs/.gitkeep
+downloads/
+*.partial
+*.safetensors
+*.cm-info.json
+*.preview.jpeg
+*.preview.png
+*.preview.webp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
