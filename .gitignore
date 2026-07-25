@@ -3,6 +3,10 @@
 .env.local
 .env.*.local
 
+# Local-only working notes (not for GitHub)
+todo.md
+TODO.local.md
+
 # Python
 .venv/
 venv/
