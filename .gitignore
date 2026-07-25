@@ -28,6 +28,8 @@ build/
 # Runtime outputs
 logs/*.jsonl
 logs/*.log
+logs/job.json
+logs/job.json.tmp
 !logs/.gitkeep
 downloads/
 *.partial
