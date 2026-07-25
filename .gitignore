@@ -7,6 +7,10 @@
 todo.md
 TODO.local.md
 
+# Local-only Cursor rules (not for GitHub)
+.cursor/rules/win95-browser-ui.mdc
+
+
 # Python
 .venv/
 venv/
