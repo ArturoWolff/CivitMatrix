@@ -16,6 +16,7 @@ from civitmatrix.indexer import (
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 
@@ -98,18 +99,14 @@ def process_one(
 
     weight_path = out_dir / f"{stem}.safetensors"
     info_path = out_dir / f"{stem}.cm-info.json"
-    preview_path = out_dir / f"{stem}.preview.jpeg"
+    preview_tmp = out_dir / f"{stem}.preview.download"
+    preview_path: Path | None = None
 
     download_url = file_info.get("downloadUrl") or (
         f"{client.base_url}/api/download/models/{version_id}"
     )
 
-    preview_url = None
-    for img in version.get("images") or []:
-        u = img.get("url")
-        if u:
-            preview_url = u
-            break
+    preview_url = pick_preview_url(version.get("images") or [])
 
     tags = [
         t if isinstance(t, str) else t.get("name") for t in (model.get("tags") or [])
@@ -140,12 +137,14 @@ def process_one(
         client.download(download_url, weight_path)
         if preview_url:
             try:
-                client.download(preview_url, preview_path)
+                client.download(preview_url, preview_tmp)
+                preview_path = finalize_preview_file(preview_tmp, out_dir, stem)
             except Exception as e:
+                preview_tmp.unlink(missing_ok=True)
                 logger.log(f"WARN preview failed model={model['id']}: {e}")
 
         cm = build_cm_info(model, version, file_info, stem, out_dir)
-        if preview_path.exists():
+        if preview_path is not None:
             cm["ThumbnailImageUrl"] = str(preview_path)
         info_path.write_text(json.dumps(cm, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -164,7 +163,7 @@ def process_one(
                 "localStem": stem,
                 "weightPath": str(weight_path),
                 "infoPath": str(info_path),
-                "previewPath": str(preview_path) if preview_path.exists() else None,
+                "previewPath": str(preview_path) if preview_path is not None else None,
                 "tags": [t for t in tags if t],
                 "nsfw": model.get("nsfw"),
                 "nsfwLevel": model.get("nsfwLevel"),
@@ -178,6 +177,7 @@ def process_one(
                 localStem=stem,
                 blake3=blake3,
                 weightPath=str(weight_path),
+                previewPath=str(preview_path) if preview_path is not None else None,
                 **_model_fields(model, version),
             )
         return "ok"
@@ -201,6 +201,7 @@ def process_one(
                 **_model_fields(model, version),
             )
         weight_path.unlink(missing_ok=True)
+        preview_tmp.unlink(missing_ok=True)
         return "forbidden"
     except FileNotFoundError as e:
         _release_reservation(
@@ -222,6 +223,7 @@ def process_one(
                 **_model_fields(model, version),
             )
         weight_path.unlink(missing_ok=True)
+        preview_tmp.unlink(missing_ok=True)
         return "not_found"
     except Exception as e:
         _release_reservation(
@@ -244,7 +246,9 @@ def process_one(
             )
         weight_path.unlink(missing_ok=True)
         info_path.unlink(missing_ok=True)
-        preview_path.unlink(missing_ok=True)
+        preview_tmp.unlink(missing_ok=True)
+        if preview_path is not None:
+            preview_path.unlink(missing_ok=True)
         return "error"
 
 

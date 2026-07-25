@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from civitmatrix.logging_io import utc_now
+from civitmatrix.preview_media import find_preview_path
 
 
 def build_cm_info(
@@ -22,7 +23,7 @@ def build_cm_info(
     tag_names = [t if isinstance(t, str) else t.get("name") for t in tags]
     tag_names = [t for t in tag_names if t]
 
-    preview = out_dir / f"{local_stem}.preview.jpeg"
+    preview = find_preview_path(out_dir, local_stem)
     return {
         "ModelId": model.get("id"),
         "ModelName": model.get("name"),
@@ -59,7 +60,7 @@ def build_cm_info(
             "rating": stats.get("rating", 0),
         },
         "UserTitle": None,
-        "ThumbnailImageUrl": str(preview) if preview.exists() else None,
+        "ThumbnailImageUrl": str(preview) if preview is not None else None,
         "InferenceDefaults": None,
         "Source": 0,
         "SourceUrl": None,

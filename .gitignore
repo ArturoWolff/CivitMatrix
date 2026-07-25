@@ -36,8 +36,14 @@ downloads/
 *.safetensors
 *.cm-info.json
 *.preview.jpeg
+*.preview.jpg
 *.preview.png
 *.preview.webp
+*.preview.mp4
+*.preview.webm
+*.preview.gif
+*.preview.bin
+*.preview.download
 .civitmatrix.lock
 
 # OS / editor
