@@ -40,3 +40,16 @@ def remote_blake3_from_file_info(file_info: dict[str, Any] | None) -> str | None
         return None
     h = (file_info.get("hashes") or {}).get("BLAKE3")
     return str(h) if h else None
+
+
+def version_matches_local_hash(
+    version_payload: dict[str, Any] | None,
+    expected_version_id: int,
+) -> bool:
+    """True when by-hash lookup resolves to the version we intended to download."""
+    if not version_payload:
+        return False
+    try:
+        return int(version_payload.get("id") or 0) == int(expected_version_id)
+    except (TypeError, ValueError):
+        return False

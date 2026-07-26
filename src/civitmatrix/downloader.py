@@ -38,7 +38,11 @@ from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 from civitmatrix.stream_run import run_streaming_pool
-from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
+from civitmatrix.verify_blake3 import (
+    remote_blake3_from_file_info,
+    verify_weight_blake3,
+    version_matches_local_hash,
+)
 
 _index_lock = threading.Lock()
 
@@ -222,13 +226,70 @@ def process_one(
             download_url, weight_path, resume=resume, on_event=_dl_event
         )
 
+        remote_b3 = remote_blake3_from_file_info(file_info) or blake3
         v_status, local_hash, v_reason = verify_weight_blake3(
-            weight_path,
-            remote_blake3_from_file_info(file_info) or blake3,
-            skip=skip_verify,
+            weight_path, remote_b3, skip=skip_verify
         )
-        if v_status == "ok":
+
+        # CivitAI sometimes publishes stale BLAKE3/SHA256 while CDN serves the
+        # current file; by-hash(local) still resolves to this versionId.
+        stale_meta_ok = False
+        if v_status not in ("ok", "skipped") and local_hash and not skip_verify:
+            try:
+                by_hash = client.get_version_by_hash(local_hash)
+            except Exception:
+                by_hash = None
+            if version_matches_local_hash(by_hash, version_id):
+                stale_meta_ok = True
+                v_status = "ok"
+                v_reason = "stale_remote_meta"
+                logger.log(
+                    f"VERIFY OK (stale API hash) model={model['id']} ver={version_id} "
+                    f"stem={stem} local={local_hash}"
+                )
+                if job:
+                    job.emit(
+                        "verify_ok_stale_meta",
+                        localStem=stem,
+                        reason="stale_remote_meta",
+                        localBlake3=local_hash,
+                        remoteBlake3=blake3,
+                        **_model_fields(model, version),
+                    )
+                with _index_lock:
+                    if blake3:
+                        local_blake3.discard(str(blake3).upper())
+                    local_blake3.add(str(local_hash).upper())
+                blake3 = str(local_hash).upper()
+                hashes = dict(file_info.get("hashes") or {})
+                hashes["BLAKE3"] = blake3
+                file_info = {**file_info, "hashes": hashes}
+
+        if v_status not in ("ok", "skipped") and not skip_verify:
+            logger.log(
+                f"VERIFY FAIL model={model['id']} ver={version_id} "
+                f"stem={stem} reason={v_reason} — retrying download once"
+            )
             if job:
+                job.emit(
+                    "verify_retry",
+                    localStem=stem,
+                    reason=v_reason,
+                    localBlake3=local_hash,
+                    remoteBlake3=blake3,
+                    **_model_fields(model, version),
+                )
+            weight_path.unlink(missing_ok=True)
+            weight_path.with_suffix(weight_path.suffix + ".partial").unlink(missing_ok=True)
+            client.download(
+                download_url, weight_path, resume=False, on_event=_dl_event
+            )
+            v_status, local_hash, v_reason = verify_weight_blake3(
+                weight_path, remote_b3, skip=False
+            )
+
+        if v_status == "ok":
+            if job and not stale_meta_ok:
                 job.emit(
                     "verify_ok",
                     localStem=stem,
@@ -275,7 +336,9 @@ def process_one(
 
         if preview_url:
             try:
-                client.download(preview_url, preview_tmp, resume=False)
+                client.download(
+                    preview_url, preview_tmp, resume=False, cli_progress=False
+                )
                 preview_path = finalize_preview_file(preview_tmp, out_dir, stem)
             except Exception as e:
                 preview_tmp.unlink(missing_ok=True)
@@ -327,7 +390,7 @@ def process_one(
             job,
             model,
             "forbidden_or_early_access",
-            retryable=True,
+            retryable=False,
             version=version,
             extra={"detail": str(e), "downloadUrl": download_url},
             detail=str(e),
@@ -541,6 +604,13 @@ def run_batch(
                             phase="running",
                         )
                         cancel_logged = True
+                logger.fail_with_event(
+                    job,
+                    model,
+                    "cancelled",
+                    retryable=True,
+                    **_model_fields(model),
+                )
                 return "cancelled"
             if cancel.is_requested():
                 with counts_lock:
@@ -551,6 +621,13 @@ def run_batch(
                             phase="running",
                         )
                         cancel_logged = True
+                logger.fail_with_event(
+                    job,
+                    model,
+                    "cancelled",
+                    retryable=True,
+                    **_model_fields(model),
+                )
                 return "cancelled"
             job.set_current(model)
             return process_one(

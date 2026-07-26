@@ -14,6 +14,14 @@ EmitFn = Callable[[str, dict[str, Any]], None]
 _cli_lock = threading.Lock()
 MIN_EVENT_BYTES = 8 * 1024 * 1024  # 8 MiB
 CLI_INTERVAL_S = 0.5
+_PROGRESS_WIDTH = 96
+
+
+def clear_progress_line() -> None:
+    """Erase a leftover \\r progress line before printing normal logs."""
+    with _cli_lock:
+        sys.stderr.write("\r" + " " * _PROGRESS_WIDTH + "\r")
+        sys.stderr.flush()
 
 
 def progress_event_threshold(total: int | None) -> int:
@@ -99,10 +107,11 @@ class DownloadProgress:
         pct_s = f"{pct:5.1f}%" if pct is not None else "  ?.?%"
         speed = self._speed()
         speed_s = f"{format_bytes(int(speed))}/s" if speed else "?/s"
-        line = (
-            f"\rDL {self.label[:40]:<40} {format_bytes(self.bytes)}"
-            f" / {format_bytes(self.total)} {pct_s} {speed_s}   "
+        body = (
+            f"DL {self.label[:40]:<40} {format_bytes(self.bytes)}"
+            f" / {format_bytes(self.total)} {pct_s} {speed_s}"
         )
+        line = f"\r{body:<{_PROGRESS_WIDTH - 1}}"
         with _cli_lock:
             if final:
                 sys.stderr.write(line + "\n")

@@ -29,6 +29,9 @@ class RunLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def log(self, msg: str) -> None:
+        from civitmatrix.download_progress import clear_progress_line
+
+        clear_progress_line()
         line = f"[{utc_now()}] {msg}"
         with _print_lock:
             print(line, flush=True)
@@ -112,8 +115,13 @@ class RunLogger:
     def load_failed_model_ids(self) -> list[int]:
         if not self.failed_path.exists():
             return []
-        ids: list[int] = []
-        seen: set[int] = set()
+        skip_reasons = {
+            "forbidden_or_early_access",
+            "not_found",
+            "no_matching_base_version",
+            "no_files",
+        }
+        latest: dict[int, dict[str, Any]] = {}
         for line in self.failed_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -122,11 +130,15 @@ class RunLogger:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            mid = row.get("modelId")
+            if mid is None:
+                continue
+            latest[int(mid)] = row
+        ids: list[int] = []
+        for mid, row in latest.items():
             if not row.get("retryable", True):
                 continue
-            mid = row.get("modelId")
-            if mid is None or mid in seen:
+            if row.get("reason") in skip_reasons:
                 continue
-            seen.add(int(mid))
-            ids.append(int(mid))
+            ids.append(mid)
         return ids

@@ -84,6 +84,7 @@ class CivitClient:
         *,
         resume: bool = True,
         on_event: DownloadEventFn | None = None,
+        cli_progress: bool = True,
     ) -> None:
         """
         Download to dest via ``dest.partial``.
@@ -167,7 +168,7 @@ class CivitClient:
                         path=str(tmp),
                         label=dest.name,
                         emit=lambda ev, fields: emit(ev, **fields),
-                        cli=True,
+                        cli=cli_progress,
                     )
                     if start_offset > 0:
                         prog.seed_bytes(start_offset)
