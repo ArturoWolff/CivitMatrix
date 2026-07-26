@@ -157,6 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--skip-verify",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Skip post-download BLAKE3 verify "
+            "(default: env SKIP_VERIFY or false — verify on)"
+        ),
+    )
+    p.add_argument(
         "--purge-orphans",
         action="store_true",
         help="With --heal, delete .cm-info/preview that have no matching weight",
@@ -211,6 +220,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.resume_partials is not None
         else _env_bool("RESUME_PARTIALS", True)
     )
+    skip_verify = (
+        args.skip_verify
+        if args.skip_verify is not None
+        else _env_bool("SKIP_VERIFY", False)
+    )
 
     client = CivitClient(base_url, api_key)
     if args.heal:
@@ -237,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         retry_failed=args.retry_failed,
         keep_partials=keep_partials,
         resume=resume_partials,
+        skip_verify=skip_verify,
     )
 
 

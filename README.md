@@ -122,6 +122,7 @@ Then refresh Stability Matrix’s model index (or restart SM) to see green **Ins
 | Concurrency | `MAX_CONCURRENT` | `--concurrency` | `2` |
 | Keep preview temps | `KEEP_PARTIALS` | `--keep-partials` | `false` |
 | Range-resume weights | `RESUME_PARTIALS` | `--resume-partials` / `--no-resume-partials` | `true` |
+| Skip BLAKE3 verify | `SKIP_VERIFY` | `--skip-verify` | `false` |
 
 Examples:
 

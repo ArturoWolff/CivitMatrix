@@ -24,6 +24,7 @@ from civitmatrix.pause_control import PauseGate
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
+from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
 
 _index_lock = threading.Lock()
 
@@ -53,6 +54,7 @@ def process_one(
     dry_run: bool,
     job: JobState | None = None,
     resume: bool = True,
+    skip_verify: bool = False,
 ) -> str:
     version = pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -159,6 +161,62 @@ def process_one(
         client.download(
             download_url, weight_path, resume=resume, on_event=_dl_event
         )
+
+        v_status, local_hash, v_reason = verify_weight_blake3(
+            weight_path,
+            remote_blake3_from_file_info(file_info) or blake3,
+            skip=skip_verify,
+        )
+        if v_status == "ok":
+            if job:
+                job.emit(
+                    "verify_ok",
+                    localStem=stem,
+                    blake3=local_hash,
+                    **_model_fields(model, version),
+                )
+        elif v_status == "skipped":
+            if job:
+                job.emit(
+                    "verify_skipped",
+                    localStem=stem,
+                    reason=v_reason,
+                    **_model_fields(model, version),
+                )
+        else:
+            logger.log(
+                f"VERIFY FAIL model={model['id']} ver={version_id} "
+                f"stem={stem} reason={v_reason} local={local_hash}"
+            )
+            weight_path.unlink(missing_ok=True)
+            preview_tmp.unlink(missing_ok=True)
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
+            logger.record_failure(
+                model,
+                "verify_fail",
+                retryable=True,
+                version=version,
+                extra={
+                    "detail": v_reason,
+                    "localBlake3": local_hash,
+                    "remoteBlake3": blake3,
+                    "localStem": stem,
+                },
+            )
+            if job:
+                job.emit(
+                    "verify_fail",
+                    localStem=stem,
+                    reason=v_reason,
+                    localBlake3=local_hash,
+                    remoteBlake3=blake3,
+                    retryable=True,
+                    **_model_fields(model, version),
+                )
+            return "verify_fail"
+
         if preview_url:
             try:
                 client.download(preview_url, preview_tmp, resume=False)
@@ -307,6 +365,7 @@ def run_batch(
     retry_failed: bool,
     keep_partials: bool = False,
     resume: bool = True,
+    skip_verify: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -323,6 +382,7 @@ def run_batch(
         sort=sort,
         outDir=str(out_dir),
         resumePartials=bool(resume),
+        skipVerify=bool(skip_verify),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -504,6 +564,7 @@ def run_batch(
                 dry_run=dry_run,
                 job=job,
                 resume=resume,
+                skip_verify=skip_verify,
             )
             with counts_lock:
                 counts[status] = counts.get(status, 0) + 1

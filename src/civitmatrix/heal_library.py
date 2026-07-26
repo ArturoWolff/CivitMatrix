@@ -10,6 +10,7 @@ from typing import Any, Callable
 from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.index_health import index_diagnostics, load_cm_info
 from civitmatrix.preview_media import finalize_preview_file, find_preview_path, pick_preview_url
+from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
 
 LogFn = Callable[[str], None]
 BuildCmFn = Callable[
@@ -352,6 +353,15 @@ def _redownload_version(
         weight_path.unlink(missing_ok=True)
         return False
 
+    remote_h = remote_blake3_from_file_info(file_info)
+    v_status, local_hash, v_reason = verify_weight_blake3(
+        weight_path, remote_h, skip=False
+    )
+    if v_status == "fail":
+        log(f"HEAL verify fail stem={stem} reason={v_reason}")
+        weight_path.unlink(missing_ok=True)
+        return False
+
     model_id = version.get("modelId")
     if model_id is not None:
         try:
@@ -361,10 +371,11 @@ def _redownload_version(
     else:
         model = _model_from_version_payload(version)
 
-    try:
-        local_hash = file_blake3_hex(weight_path)
-    except OSError:
-        local_hash = (file_info.get("hashes") or {}).get("BLAKE3")
+    if not local_hash:
+        try:
+            local_hash = file_blake3_hex(weight_path)
+        except OSError:
+            local_hash = remote_h
     if local_hash:
         hashes = dict(file_info.get("hashes") or {})
         hashes["BLAKE3"] = str(local_hash).upper()

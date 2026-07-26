@@ -67,6 +67,7 @@ NSFW=true
 MATCH_BASE_VERSION=true
 KEEP_PARTIALS=false
 RESUME_PARTIALS=true
+SKIP_VERIFY=false
 ```
 
 CLI overrides env for a single run:
@@ -153,6 +154,22 @@ Downloads write to `*.safetensors.partial` then rename into place. If the proces
 ```
 
 On start, preview `*.preview.download*` temps are still purged (`partial_purged`); weight partials are left alone for resume.
+
+## Post-download BLAKE3 verify
+
+After each weight download (including Range resume), CivitMatrix hashes the file and compares to CivitAI’s `BLAKE3` **before** writing `.cm-info.json`.
+
+| Result | What happens |
+|--------|----------------|
+| Match | `verify_ok` → write sidecars as usual |
+| Mismatch | delete weight; `verify_fail` (retryable); no sidecar |
+| No remote hash | `verify_skipped` (`no_remote_hash`); file kept |
+| `--skip-verify` | `verify_skipped` (`flag`); file kept |
+
+```bash
+./run.sh                      # verify on (default)
+./run.sh --skip-verify        # opt out
+```
 
 ## Library heal (`--heal`)
 
