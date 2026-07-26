@@ -36,6 +36,7 @@ class CivitClient:
         nsfw: bool = True,
         sort: str = "Highest Rated",
         page_limit: int = 100,
+        on_page: Callable[..., None] | None = None,
     ) -> Iterator[dict[str, Any]]:
         url = f"{self.base_url}/api/v1/models"
         params: dict[str, Any] = {
@@ -45,12 +46,17 @@ class CivitClient:
             "limit": page_limit,
             "sort": sort,
         }
+        page_num = 0
         while True:
             data = self.get_json(url, params=params)
-            for item in data.get("items") or []:
-                yield item
+            items = list(data.get("items") or [])
             meta = data.get("metadata") or {}
             next_page = meta.get("nextPage")
+            page_num += 1
+            if on_page is not None:
+                on_page(page=page_num, next_page=next_page, items=items)
+            for item in items:
+                yield item
             if not next_page:
                 break
             url = next_page
