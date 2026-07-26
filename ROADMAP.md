@@ -66,7 +66,7 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 - [ ] Preflight size estimator (TB warning)  
 - [ ] Bandwidth / rate limits  
-- [ ] Listing cache (pages/cursors; resume after crash)  
+- [x] Listing cache (opt-in page blobs; `--use-listing-cache` / `--refresh-listing`)  
 - [ ] Better Windows path UX  
 - [ ] Translations
 

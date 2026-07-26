@@ -192,6 +192,8 @@ On start (after lock), preview download temps are purged; **weight** `*.safetens
 
 Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart.
 
+**Listing cache (opt-in):** `--use-listing-cache` reuses a complete page cache under `logs/listing-cache/` for the current filters; default runs always re-list. `--refresh-listing` forces a fresh API list (and rewrites the cache when caching is on).
+
 **`--status` exit codes:** `0` done · `1` missing job · `2` error · `4` cancelled · `5` paused · `6` active  
 **Runner exits:** `0` ok · `2` missing API key · `3` lock busy · `4` cancelled · `130` forced second Ctrl+C
 

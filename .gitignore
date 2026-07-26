@@ -34,6 +34,7 @@ logs/cancel.request
 logs/cancel.request.tmp
 logs/pause.request
 logs/pause.request.tmp
+logs/listing-cache/
 !logs/.gitkeep
 downloads/
 *.partial

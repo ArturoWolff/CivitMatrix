@@ -813,7 +813,7 @@ EOF
 - Modify: `ROADMAP.md` (check listing cache)
 - Modify: `todo.md` locally only — mark `[x]` (do not commit)
 
-- [ ] **Step 1: README blurb**
+- [x] **Step 1: README blurb**
 
 Add under control plane / after stream sentence:
 
@@ -821,11 +821,11 @@ Add under control plane / after stream sentence:
 **Listing cache (opt-in):** `--use-listing-cache` reuses a complete page cache under `logs/listing-cache/` for the current filters; default runs always re-list. `--refresh-listing` forces a fresh API list (and rewrites the cache when caching is on).
 ```
 
-- [ ] **Step 2: GUIDE flags table rows**
+- [x] **Step 2: GUIDE flags table rows**
 
 Document both flags; note default freshness; note `--limit` never marks cache complete.
 
-- [ ] **Step 3: ROADMAP**
+- [x] **Step 3: ROADMAP**
 
 Under QoL / crash recovery, mark:
 
@@ -833,11 +833,11 @@ Under QoL / crash recovery, mark:
 - [x] Listing cache (opt-in page blobs; `--use-listing-cache` / `--refresh-listing`)
 ```
 
-- [ ] **Step 4: Mark local todo**
+- [x] **Step 4: Mark local todo**
 
 In `todo.md`: change listing cache line to `[x]`.
 
-- [ ] **Step 5: Ignore cache artifacts in git**
+- [x] **Step 5: Ignore cache artifacts in git**
 
 Append to `.gitignore`:
 
@@ -845,7 +845,7 @@ Append to `.gitignore`:
 logs/listing-cache/
 ```
 
-- [ ] **Step 6: Commit docs** (push only if user asks)
+- [x] **Step 6: Commit docs** (push only if user asks)
 
 ```bash
 git add README.md docs/GUIDE.md ROADMAP.md .gitignore docs/superpowers/plans/2026-07-26-listing-cache.md

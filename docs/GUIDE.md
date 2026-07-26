@@ -157,6 +157,30 @@ Downloads write to `*.safetensors.partial` then rename into place. If the proces
 
 On start, preview `*.preview.download*` temps are still purged (`partial_purged`); weight partials are left alone for resume.
 
+## Listing cache (opt-in)
+
+By default every run fetches a **fresh** catalog from the CivitAI API — no cache read or write. Opt in when repeat runs should skip listing HTTP for the same filters.
+
+| Flag | Behavior |
+|------|----------|
+| *(default)* | Fresh list from API; do not read or write `logs/listing-cache/` |
+| `--use-listing-cache` | Reuse a matching **complete** page cache, or fetch from API and build one while listing |
+| `--refresh-listing` | Always fetch from API (ignores any existing cache) |
+| `--use-listing-cache --refresh-listing` | Fetch from API and overwrite the cache for current filters |
+
+Cache files live under `logs/listing-cache/` as `<key>.meta.json` + `<key>.jsonl` (one API page per line). There is no TTL — refresh on demand with `--refresh-listing` or delete the pair.
+
+**Freshness:** only caches with `complete: true` are reused. A run stopped early by `--limit` or cancel leaves `complete: false`, so the next `--use-listing-cache` run still hits the API. A cache **hit** still respects `--limit` (only the first N models are processed). `--retry-failed` never uses the listing cache.
+
+```bash
+./run.sh --dry-run --use-listing-cache          # build cache while listing (no limit → complete)
+./run.sh --dry-run --use-listing-cache          # second run: cache hit, no listing HTTP
+./run.sh --dry-run --use-listing-cache --refresh-listing   # force fresh list + rewrite cache
+./run.sh --dry-run --limit 5 --use-listing-cache           # partial cache; next run still re-lists
+```
+
+Events: `listing_cache_hit`, `listing_cache_miss`, `listing_cache_write` in `logs/events.jsonl`.
+
 ## Post-download BLAKE3 verify
 
 After each weight download (including Range resume), CivitMatrix hashes the file and compares to CivitAI’s `BLAKE3` **before** writing `.cm-info.json`.
