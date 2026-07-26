@@ -65,6 +65,7 @@ SORT=Highest Rated
 MAX_CONCURRENT=2
 NSFW=true
 MATCH_BASE_VERSION=true
+KEEP_PARTIALS=false
 ```
 
 CLI overrides env for a single run:
@@ -139,6 +140,19 @@ source .venv/bin/activate.fish
 
 Previews are saved with an extension that matches **file content** (magic bytes), not always `.jpeg`.  
 Still images prefer the API image URL; video previews become `.preview.mp4`.
+
+## Crash leftovers (`*.partial`)
+
+Downloads write to a temp `*.partial` (and preview temps) then rename into place. If the process dies mid-file, those leftovers can sit in `--out`.
+
+On the next run (after acquiring the lock), CivitMatrix **deletes** top-level stale temps in that folder and emits `partial_purged`.
+
+```bash
+./run.sh --keep-partials          # skip the sweep
+# or KEEP_PARTIALS=true in .env
+```
+
+HTTP Range resume of kept partials is a follow-up feature.
 
 ## Security
 

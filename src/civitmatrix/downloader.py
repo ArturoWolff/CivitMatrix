@@ -17,6 +17,7 @@ from civitmatrix.indexer import (
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.partial_sweep import purge_stale_partials
 from civitmatrix.pause_control import PauseGate
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
@@ -283,6 +284,7 @@ def run_batch(
     dry_run: bool,
     limit: int,
     retry_failed: bool,
+    keep_partials: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -325,6 +327,17 @@ def run_batch(
 
     job.emit("lock_acquired", lockPath=str(lock.path), pid=os.getpid())
     job.set_meta(lockPath=str(lock.path))
+
+    if keep_partials:
+        job.emit("partial_sweep_skipped", reason="keep_partials")
+        logger.log("Keeping stale partials (--keep-partials / KEEP_PARTIALS)")
+    else:
+        removed = purge_stale_partials(out_dir)
+        job.set_count("partialsPurged", len(removed))
+        sample = [p.name for p in removed[:20]]
+        job.emit("partial_purged", count=len(removed), sample=sample)
+        if removed:
+            logger.log(f"Purged {len(removed)} stale partial file(s)")
 
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     logger.log(

@@ -131,6 +131,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --status, print JSON instead of a human summary",
     )
+    p.add_argument(
+        "--keep-partials",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Keep stale *.partial / preview download temps on start "
+            "(default: env KEEP_PARTIALS or false — purge them)"
+        ),
+    )
     return p
 
 
@@ -171,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.match_base_version is not None
         else _env_bool("MATCH_BASE_VERSION", True)
     )
+    keep_partials = (
+        args.keep_partials
+        if args.keep_partials is not None
+        else _env_bool("KEEP_PARTIALS", False)
+    )
 
     client = CivitClient(base_url, api_key)
     return run_batch(
@@ -186,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         limit=args.limit,
         retry_failed=args.retry_failed,
+        keep_partials=keep_partials,
     )
 
 

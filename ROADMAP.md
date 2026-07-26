@@ -16,6 +16,7 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Cooperative `--cancel` / Ctrl+C (exit 4)
 - [x] Cooperative `--pause` / `--resume`
 - [x] `--status` / `--status --json` with stable exit codes
+- [x] On start: purge stale `*.partial` / preview download temps (`--keep-partials` to skip)
 
 ## v0.2 — Filters
 
@@ -48,6 +49,12 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [ ] Update-only mode (newer version than installed)  
 - [ ] Parity checks vs SM connected metadata  
 - [ ] Optional import of existing SM libraries into the manifest
+
+## Crash recovery (next)
+
+- [ ] HTTP **Range** resume when `--keep-partials` left bytes behind  
+- [ ] Recovery events already include `partial_purged`; add `download_resume`  
+- [ ] Safe restart mid-catalog without re-downloading verified files  
 
 ## QoL forever
 
