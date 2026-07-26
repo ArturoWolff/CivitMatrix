@@ -12,6 +12,7 @@ from civitmatrix.client import CivitClient
 from civitmatrix.downloader import run_batch
 from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
+from civitmatrix.status_control import print_status_cli
 
 SORT_CHOICES = [
     "Highest Rated",
@@ -120,6 +121,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume a paused run (clears logs/pause.request)",
     )
+    ctrl.add_argument(
+        "--status",
+        action="store_true",
+        help="Print logs/job.json status (use --json for machine output)",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="With --status, print JSON instead of a human summary",
+    )
     return p
 
 
@@ -131,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     logs_dir = root / "logs"
+    if args.status:
+        return print_status_cli(logs_dir, logs_dir / "job.json", as_json=args.json)
     if args.cancel:
         return request_cancel_cli(logs_dir, logs_dir / "job.json")
     if args.pause:
