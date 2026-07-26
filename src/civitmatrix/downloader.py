@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from civitmatrix.cancel_control import CancelGate
 from civitmatrix.client import CivitClient
 from civitmatrix.indexer import (
     load_local_index,
@@ -283,6 +284,9 @@ def run_batch(
     retry_failed: bool,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
+    cancel = CancelGate(logger.job_path.parent)
+    cancel.clear()  # drop stale flag from a previous run
+
     job = JobState(logger.job_path)
     job.set_meta(
         dryRun=bool(dry_run),
@@ -291,6 +295,7 @@ def run_batch(
         sort=sort,
         outDir=str(out_dir),
     )
+    cancel.install_sigint(lambda: job.run_id)
 
     try:
         lock = RunLock.acquire(out_dir, job.run_id)
@@ -310,6 +315,7 @@ def run_batch(
     )
 
     models: list[dict[str, Any]] = []
+    cancelled = False
     try:
         job.set_phase("listing")
         if retry_failed:
@@ -318,6 +324,9 @@ def run_batch(
             import time
 
             for mid in ids:
+                if cancel.is_requested():
+                    cancelled = True
+                    break
                 try:
                     models.append(client.get_model(mid))
                 except Exception as e:
@@ -342,6 +351,9 @@ def run_batch(
                 ),
                 1,
             ):
+                if cancel.is_requested():
+                    cancelled = True
+                    break
                 models.append(model)
                 if i % 50 == 0:
                     job.set_count("listed", i)
@@ -350,7 +362,21 @@ def run_batch(
                 if limit and i >= limit:
                     break
             job.set_count("listed", len(models))
-            job.emit("listing_done", listed=len(models))
+            if not cancelled:
+                job.emit("listing_done", listed=len(models))
+
+        if cancelled:
+            job.emit(
+                "cancel_requested",
+                source=cancel.source,
+                phase="listing",
+                listed=len(models),
+            )
+            job.emit("run_cancelled", counts={}, listed=len(models))
+            job.set_phase("cancelled")
+            cancel.clear()
+            logger.log(f"Cancelled during listing after {len(models)} models.")
+            return 4
 
         logger.log(
             f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
@@ -359,8 +385,23 @@ def run_batch(
         job.set_count("total", len(models))
         counts: dict[str, int] = {}
         counts_lock = threading.Lock()
+        cancel_logged = False
 
         def worker(model: dict[str, Any]) -> str:
+            nonlocal cancel_logged
+            if cancel.is_requested():
+                with counts_lock:
+                    if not cancel_logged:
+                        job.emit(
+                            "cancel_requested",
+                            source=cancel.source,
+                            phase="downloading",
+                        )
+                        cancel_logged = True
+                    counts["cancelled"] = counts.get("cancelled", 0) + 1
+                    job.set_count("cancelled", counts["cancelled"])
+                    job.set_count("processed", sum(counts.values()))
+                return "cancelled"
             job.set_current(model)
             status = process_one(
                 client,
@@ -383,13 +424,26 @@ def run_batch(
 
         if concurrency <= 1:
             for model in models:
-                worker(model)
+                if cancel.is_requested() and not cancel_logged:
+                    job.emit(
+                        "cancel_requested",
+                        source=cancel.source,
+                        phase="downloading",
+                    )
+                    cancel_logged = True
+                    cancelled = True
+                    break
+                status = worker(model)
+                if status == "cancelled":
+                    cancelled = True
+                    break
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as ex:
                 futs = {ex.submit(worker, m): m for m in models}
                 for fut in as_completed(futs):
                     try:
-                        fut.result()
+                        if fut.result() == "cancelled":
+                            cancelled = True
                     except Exception as e:
                         m = futs[fut]
                         logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
@@ -406,8 +460,17 @@ def run_batch(
                             job.set_count("error", counts["error"])
                             job.set_count("processed", sum(counts.values()))
 
+        if cancelled or counts.get("cancelled"):
+            job.emit("run_cancelled", counts=dict(counts))
+            job.set_phase("cancelled")
+            cancel.clear()
+            logger.log(f"Cancelled. Counts: {json.dumps(counts, sort_keys=True)}")
+            logger.log(f"Job status -> {logger.job_path}")
+            return 4
+
         job.emit("run_done", counts=dict(counts))
         job.set_phase("done")
+        cancel.clear()
         logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
         logger.log(f"Failures -> {logger.failed_path}")
         logger.log(f"Manifest -> {logger.manifest_path}")

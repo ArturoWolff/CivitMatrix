@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from civitmatrix import __version__
+from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
 from civitmatrix.downloader import run_batch
 from civitmatrix.logging_io import RunLogger
@@ -102,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: env MATCH_BASE_VERSION or true)"
         ),
     )
+    p.add_argument(
+        "--cancel",
+        action="store_true",
+        help="Request cooperative cancel of the active run (writes logs/cancel.request)",
+    )
     return p
 
 
@@ -112,8 +118,12 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()  # also allow exported env vars / parent .env
     args = build_parser().parse_args(argv)
 
+    logs_dir = root / "logs"
+    if args.cancel:
+        return request_cancel_cli(logs_dir, logs_dir / "job.json")
+
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
-    logger = RunLogger(root / "logs")
+    logger = RunLogger(logs_dir)
     if not api_key:
         logger.log("ERROR: CIVITAI_API_KEY missing — copy .env.example to .env and set your key")
         return 2
