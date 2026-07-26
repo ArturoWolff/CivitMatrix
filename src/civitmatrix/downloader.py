@@ -560,34 +560,42 @@ def run_batch(
             refresh_listing=refresh_listing,
         )
 
-        counts, cancelled, listed = run_streaming_pool(
-            model_iter,
-            worker=worker,
-            concurrency=concurrency,
-            limit=limit,
-            should_stop=should_stop,
-            on_listed=on_listed,
-            on_worker_crash=on_worker_crash,
-            on_result=on_result,
-        )
-
-        writer = listing_state["writer"]
-        if writer is not None:
-            limited = bool(limit) and listed >= limit
-            complete = bool(listing_state["exhausted"]) and not cancelled and not limited
-            meta = writer.finalize(complete=complete)
-            job.emit(
-                "listing_cache_write",
-                key=writer.key,
-                path=str(writer.jsonl_path),
-                complete=complete,
-                pages=meta.get("pages"),
-                items=meta.get("items"),
+        counts: dict[str, int] = {}
+        cancelled = False
+        listed = 0
+        try:
+            counts, cancelled, listed = run_streaming_pool(
+                model_iter,
+                worker=worker,
+                concurrency=concurrency,
+                limit=limit,
+                should_stop=should_stop,
+                on_listed=on_listed,
+                on_worker_crash=on_worker_crash,
+                on_result=on_result,
             )
-            logger.log(
-                f"Listing cache write complete={complete} "
-                f"pages={meta.get('pages')} items={meta.get('items')}"
-            )
+        finally:
+            writer = listing_state["writer"]
+            if writer is not None:
+                limited = bool(limit) and listed >= limit
+                complete = (
+                    bool(listing_state["exhausted"])
+                    and not cancelled
+                    and not limited
+                )
+                meta = writer.finalize(complete=complete)
+                job.emit(
+                    "listing_cache_write",
+                    key=writer.key,
+                    path=str(writer.jsonl_path),
+                    complete=complete,
+                    pages=meta.get("pages"),
+                    items=meta.get("items"),
+                )
+                logger.log(
+                    f"Listing cache write complete={complete} "
+                    f"pages={meta.get('pages')} items={meta.get('items')}"
+                )
 
         job.set_count("listed", listed)
         if not cancelled:

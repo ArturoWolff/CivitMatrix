@@ -73,9 +73,25 @@ def probe_cache(
             return "mismatch", None
         if not meta.get("complete"):
             return "incomplete", None
+        _validate_jsonl_readable(jsonl_path)
         return "ok", meta
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return "corrupt", None
+
+
+def _validate_jsonl_readable(jsonl_path: Path) -> None:
+    """Raise if jsonl cannot be fully parsed as page rows (corrupt / unreadable)."""
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("jsonl row must be a JSON object")
+            items = row.get("items")
+            if items is not None and not isinstance(items, list):
+                raise ValueError("jsonl items must be a list")
 
 
 def iter_cached_models(jsonl_path: Path) -> Iterator[dict[str, Any]]:
