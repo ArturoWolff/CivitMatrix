@@ -52,6 +52,7 @@ def process_one(
     match_base_version: bool,
     dry_run: bool,
     job: JobState | None = None,
+    resume: bool = True,
 ) -> str:
     version = pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -137,12 +138,30 @@ def process_one(
                 "download_start",
                 localStem=stem,
                 remoteFileName=remote_name,
+                resume=resume,
                 **_model_fields(model, version),
             )
-        client.download(download_url, weight_path)
+
+        def _dl_event(event: str, fields: dict[str, Any]) -> None:
+            if event == "download_resume":
+                logger.log(
+                    f"RESUME model={model['id']} ver={version_id} "
+                    f"offset={fields.get('offset')} -> {weight_path.name}"
+                )
+            if job:
+                job.emit(
+                    event,
+                    localStem=stem,
+                    **fields,
+                    **_model_fields(model, version),
+                )
+
+        client.download(
+            download_url, weight_path, resume=resume, on_event=_dl_event
+        )
         if preview_url:
             try:
-                client.download(preview_url, preview_tmp)
+                client.download(preview_url, preview_tmp, resume=False)
                 preview_path = finalize_preview_file(preview_tmp, out_dir, stem)
             except Exception as e:
                 preview_tmp.unlink(missing_ok=True)
@@ -287,6 +306,7 @@ def run_batch(
     limit: int,
     retry_failed: bool,
     keep_partials: bool = False,
+    resume: bool = True,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -302,6 +322,7 @@ def run_batch(
         modelType=model_type,
         sort=sort,
         outDir=str(out_dir),
+        resumePartials=bool(resume),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -332,14 +353,18 @@ def run_batch(
 
     if keep_partials:
         job.emit("partial_sweep_skipped", reason="keep_partials")
-        logger.log("Keeping stale partials (--keep-partials / KEEP_PARTIALS)")
+        logger.log("Keeping all temps including preview downloads (--keep-partials)")
     else:
-        removed = purge_stale_partials(out_dir)
+        # Keep *.safetensors.partial for Range resume; purge preview junk only
+        removed = purge_stale_partials(out_dir, keep_weight_partials=True)
         job.set_count("partialsPurged", len(removed))
         sample = [p.name for p in removed[:20]]
         job.emit("partial_purged", count=len(removed), sample=sample)
         if removed:
-            logger.log(f"Purged {len(removed)} stale partial file(s)")
+            logger.log(
+                f"Purged {len(removed)} stale preview/temp file(s) "
+                "(weight *.safetensors.partial kept for resume)"
+            )
 
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     diag = index_diagnostics(out_dir)
@@ -478,6 +503,7 @@ def run_batch(
                 match_base_version=match_base_version,
                 dry_run=dry_run,
                 job=job,
+                resume=resume,
             )
             with counts_lock:
                 counts[status] = counts.get(status, 0) + 1
@@ -603,7 +629,7 @@ def run_heal(
         if keep_partials:
             job.emit("partial_sweep_skipped", reason="keep_partials")
         else:
-            removed = purge_stale_partials(out_dir)
+            removed = purge_stale_partials(out_dir, keep_weight_partials=True)
             job.set_count("partialsPurged", len(removed))
             job.emit(
                 "partial_purged",
@@ -611,7 +637,10 @@ def run_heal(
                 sample=[p.name for p in removed[:20]],
             )
             if removed:
-                logger.log(f"Purged {len(removed)} stale partial file(s)")
+                logger.log(
+                    f"Purged {len(removed)} stale preview/temp file(s) "
+                    "(weight *.safetensors.partial kept for resume)"
+                )
 
         diag = index_diagnostics(out_dir)
         logger.log(f"{format_index_log_line(diag)} under {out_dir}")

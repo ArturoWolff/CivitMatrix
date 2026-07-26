@@ -120,7 +120,8 @@ Then refresh Stability Matrix’s model index (or restart SM) to see green **Ins
 | NSFW | `NSFW` | `--nsfw` / `--no-nsfw` | `true` |
 | Match base version | `MATCH_BASE_VERSION` | `--match-base-version` | `true` |
 | Concurrency | `MAX_CONCURRENT` | `--concurrency` | `2` |
-| Keep partials | `KEEP_PARTIALS` | `--keep-partials` | `false` |
+| Keep preview temps | `KEEP_PARTIALS` | `--keep-partials` | `false` |
+| Range-resume weights | `RESUME_PARTIALS` | `--resume-partials` / `--no-resume-partials` | `true` |
 
 Examples:
 
@@ -186,7 +187,7 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
 | `<out>/.civitmatrix.lock` | One writer per output folder |
 
-On start (after lock), stale `*.partial` and `*.preview.download*` in `--out` are **deleted** by default (`partial_purged` event). Use `--keep-partials` / `KEEP_PARTIALS=true` to keep them for a future Range-resume path.
+On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
 
 **`--status` exit codes:** `0` done · `1` missing job · `2` error · `4` cancelled · `5` paused · `6` active  
 **Runner exits:** `0` ok · `2` missing API key · `3` lock busy · `4` cancelled · `130` forced second Ctrl+C

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import requests
 
 from civitmatrix import __version__
+
+DownloadEventFn = Callable[[str, dict[str, Any]], None]
 
 
 class CivitClient:
@@ -67,32 +69,96 @@ class CivitClient:
         data = r.json()
         return data if isinstance(data, dict) else None
 
-    def download(self, url: str, dest: Path, max_retries: int = 5) -> None:
+    def download(
+        self,
+        url: str,
+        dest: Path,
+        max_retries: int = 5,
+        *,
+        resume: bool = True,
+        on_event: DownloadEventFn | None = None,
+    ) -> None:
+        """
+        Download to dest via ``dest.partial``.
+        When resume=True and a partial exists, send HTTP Range and append on 206.
+        Network errors keep the partial for a later retry; auth/404 clear it.
+        """
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".partial")
+
+        def emit(event: str, **fields: Any) -> None:
+            if on_event:
+                on_event(event, fields)
+
+        if not resume and tmp.exists():
+            tmp.unlink(missing_ok=True)
+            emit("download_restart", path=str(tmp), reason="no_resume")
+
         for attempt in range(1, max_retries + 1):
             try:
+                existing = _file_size(tmp) if resume else 0
+                headers: dict[str, str] = {}
+                mode = "wb"
+                if existing > 0:
+                    headers["Range"] = f"bytes={existing}-"
+                    mode = "ab"
+                    emit("download_resume", path=str(tmp), offset=existing, attempt=attempt)
+
                 with self.session.get(
-                    url, stream=True, timeout=self.timeout, allow_redirects=True
+                    url,
+                    stream=True,
+                    timeout=self.timeout,
+                    allow_redirects=True,
+                    headers=headers,
                 ) as r:
                     if r.status_code in (401, 403):
                         raise PermissionError(f"HTTP {r.status_code} downloading {url}")
                     if r.status_code == 404:
                         raise FileNotFoundError(f"HTTP 404 downloading {url}")
-                    r.raise_for_status()
-                    with tmp.open("wb") as f:
+
+                    if existing > 0 and r.status_code == 416:
+                        # Unsatisfiable — partial is stale/corrupt
+                        tmp.unlink(missing_ok=True)
+                        emit("download_restart", path=str(tmp), reason="http_416")
+                        existing = 0
+                        mode = "wb"
+                        headers = {}
+                        continue
+
+                    if existing > 0 and r.status_code == 200:
+                        # Server ignored Range — rewrite from scratch
+                        tmp.unlink(missing_ok=True)
+                        mode = "wb"
+                        emit("download_restart", path=str(tmp), reason="server_ignored_range")
+
+                    if r.status_code not in (200, 206):
+                        r.raise_for_status()
+
+                    with tmp.open(mode) as f:
                         for chunk in r.iter_content(chunk_size=1024 * 1024):
                             if chunk:
                                 f.write(chunk)
+
                 tmp.replace(dest)
+                emit(
+                    "download_complete",
+                    path=str(dest),
+                    resumed=existing > 0 and mode == "ab",
+                    bytes= _file_size(dest),
+                )
                 return
             except (PermissionError, FileNotFoundError):
-                if tmp.exists():
-                    tmp.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
                 raise
             except Exception:
-                if tmp.exists():
-                    tmp.unlink(missing_ok=True)
+                # Keep partial for Range resume on next attempt / run
                 if attempt == max_retries:
                     raise
                 time.sleep(min(2**attempt, 30))
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return 0

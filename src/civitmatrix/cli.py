@@ -141,8 +141,19 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Keep stale *.partial / preview download temps on start "
-            "(default: env KEEP_PARTIALS or false — purge them)"
+            "On start, also keep preview download temps "
+            "(default: env KEEP_PARTIALS or false). "
+            "Weight *.safetensors.partial are always kept for Range resume."
+        ),
+    )
+    p.add_argument(
+        "--resume-partials",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "HTTP Range-resume weight *.safetensors.partial files "
+            "(default: env RESUME_PARTIALS or true). "
+            "Use --no-resume-partials to force a full re-download."
         ),
     )
     p.add_argument(
@@ -195,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.keep_partials is not None
         else _env_bool("KEEP_PARTIALS", False)
     )
+    resume_partials = (
+        args.resume_partials
+        if args.resume_partials is not None
+        else _env_bool("RESUME_PARTIALS", True)
+    )
 
     client = CivitClient(base_url, api_key)
     if args.heal:
@@ -220,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         retry_failed=args.retry_failed,
         keep_partials=keep_partials,
+        resume=resume_partials,
     )
 
 

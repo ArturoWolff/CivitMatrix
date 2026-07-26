@@ -5,8 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def iter_stale_partials(out_dir: Path) -> list[Path]:
-    """Non-recursive: *.partial and *.preview.download* in out_dir only."""
+def iter_stale_partials(
+    out_dir: Path,
+    *,
+    keep_weight_partials: bool = True,
+) -> list[Path]:
+    """
+    Non-recursive temps in out_dir.
+    By default keeps ``*.safetensors.partial`` for HTTP Range resume;
+    still collects preview download temps and other ``*.partial`` junk.
+    """
     if not out_dir.is_dir():
         return []
     found: list[Path] = []
@@ -14,18 +22,24 @@ def iter_stale_partials(out_dir: Path) -> list[Path]:
         if not p.is_file():
             continue
         name = p.name
-        if name.endswith(".partial"):
-            found.append(p)
+        if keep_weight_partials and name.endswith(".safetensors.partial"):
             continue
         if ".preview.download" in name:
+            found.append(p)
+            continue
+        if name.endswith(".partial"):
             found.append(p)
     return sorted(found)
 
 
-def purge_stale_partials(out_dir: Path) -> list[Path]:
+def purge_stale_partials(
+    out_dir: Path,
+    *,
+    keep_weight_partials: bool = True,
+) -> list[Path]:
     """Delete stale temps; return paths that were removed."""
     removed: list[Path] = []
-    for p in iter_stale_partials(out_dir):
+    for p in iter_stale_partials(out_dir, keep_weight_partials=keep_weight_partials):
         try:
             p.unlink()
             removed.append(p)

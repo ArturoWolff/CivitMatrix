@@ -66,6 +66,7 @@ MAX_CONCURRENT=2
 NSFW=true
 MATCH_BASE_VERSION=true
 KEEP_PARTIALS=false
+RESUME_PARTIALS=true
 ```
 
 CLI overrides env for a single run:
@@ -141,18 +142,17 @@ source .venv/bin/activate.fish
 Previews are saved with an extension that matches **file content** (magic bytes), not always `.jpeg`.  
 Still images prefer the API image URL; video previews become `.preview.mp4`.
 
-## Crash leftovers (`*.partial`)
+## Crash leftovers & Range resume
 
-Downloads write to a temp `*.partial` (and preview temps) then rename into place. If the process dies mid-file, those leftovers can sit in `--out`.
-
-On the next run (after acquiring the lock), CivitMatrix **deletes** top-level stale temps in that folder and emits `partial_purged`.
+Downloads write to `*.safetensors.partial` then rename into place. If the process dies mid-file, the next run **keeps** that partial and sends `Range: bytes={offset}-` to continue (event `download_resume`). If the server ignores Range (HTTP 200) or returns 416, the client restarts a full download.
 
 ```bash
-./run.sh --keep-partials          # skip the sweep
-# or KEEP_PARTIALS=true in .env
+./run.sh                            # resume weight partials by default
+./run.sh --no-resume-partials       # delete/ignore partials; full re-get
+./run.sh --keep-partials            # also keep preview download temps on start
 ```
 
-HTTP Range resume of kept partials is a follow-up feature.
+On start, preview `*.preview.download*` temps are still purged (`partial_purged`); weight partials are left alone for resume.
 
 ## Library heal (`--heal`)
 
