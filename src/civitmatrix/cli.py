@@ -176,6 +176,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force fresh listing from API (with --use-listing-cache, rewrite cache)",
     )
     p.add_argument(
+        "--disk-floor-gib",
+        type=float,
+        default=None,
+        help="Abort if free disk on out dir is below this many GiB (default: env DISK_FLOOR_GIB or 2; 0=disable)",
+    )
+    p.add_argument(
         "--purge-orphans",
         action="store_true",
         help="With --heal, delete .cm-info/preview that have no matching weight",
@@ -235,6 +241,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.skip_verify is not None
         else _env_bool("SKIP_VERIFY", False)
     )
+    if args.disk_floor_gib is not None:
+        disk_floor_gib = float(args.disk_floor_gib)
+    else:
+        try:
+            disk_floor_gib = float(os.environ.get("DISK_FLOOR_GIB", "2"))
+        except ValueError:
+            disk_floor_gib = 2.0
 
     client = CivitClient(base_url, api_key)
     if args.heal:
@@ -264,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_verify=skip_verify,
         use_listing_cache=bool(args.use_listing_cache),
         refresh_listing=bool(args.refresh_listing),
+        disk_floor_gib=disk_floor_gib,
     )
 
 

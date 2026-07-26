@@ -128,7 +128,22 @@ Batch runs **stream** models as API pages arrive (phase `running`, `streamMode: 
 | 2 | missing API key |
 | 3 | another run holds the output-folder lock |
 | 4 | cooperative cancel |
+| 5 | disk / preflight failure (free space below `--disk-floor-gib`) |
 | 130 | forced exit (second Ctrl+C) |
+
+Note: runner exit **5** (disk) is unrelated to `--status` exit **5** (paused).
+
+### Disk floor
+
+Default free-space floor is **2 GiB** on the output directory (`--disk-floor-gib` / `DISK_FLOOR_GIB`; `0` disables hard checks). At start the runner emits `disk_status` and aborts with exit 5 if below floor. Mid-run downloads recheck and may emit `disk_full` / stop with exit 5. Soft `disk_warn` when a known file size exceeds free space but the floor is still met.
+
+### Byte progress
+
+Weight downloads print a throttled `\r` progress line on stderr and emit `download_progress` events about every **max(5%, 8 MiB)**. `job.json` `current` may include `bytes` / `total` / `pct` for `--status`.
+
+### Fail ↔ event ids
+
+Each failure writes the same `eventId` on the `fail` (or `verify_fail`) event and the `failed.jsonl` row so the UI can join them. Old rows without `eventId` remain valid.
 
 ### Fish shell note
 

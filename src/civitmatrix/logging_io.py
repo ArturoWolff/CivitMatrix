@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from civitmatrix.job_state import JobState
 
 _print_lock = threading.Lock()
 _log_lock = threading.Lock()
@@ -46,9 +50,12 @@ class RunLogger:
         retryable: bool = True,
         version: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
-    ) -> None:
+        event_id: str | None = None,
+    ) -> str:
+        eid = event_id or str(uuid.uuid4())
         row: dict[str, Any] = {
             "ts": utc_now(),
+            "eventId": eid,
             "reason": reason,
             "retryable": retryable,
             "modelId": (model or {}).get("id"),
@@ -65,8 +72,42 @@ class RunLogger:
         }
         if extra:
             row.update(extra)
+        row["eventId"] = eid  # win over accidental extra overwrite
         self.append_jsonl(self.failed_path, row)
         self.log(f"FAIL model={row.get('modelId')} {row.get('modelName')!r}: {reason}")
+        return eid
+
+    def fail_with_event(
+        self,
+        job: JobState | None,
+        model: dict[str, Any] | None,
+        reason: str,
+        *,
+        retryable: bool = True,
+        version: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+        event_name: str = "fail",
+        **event_fields: Any,
+    ) -> str:
+        """Record failed.jsonl and emit control-plane event with the same eventId."""
+        eid = str(uuid.uuid4())
+        self.record_failure(
+            model,
+            reason,
+            retryable=retryable,
+            version=version,
+            extra=extra,
+            event_id=eid,
+        )
+        if job:
+            job.emit(
+                event_name,
+                eventId=eid,
+                reason=reason,
+                retryable=retryable,
+                **event_fields,
+            )
+        return eid
 
     def load_failed_model_ids(self) -> list[int]:
         if not self.failed_path.exists():

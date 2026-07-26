@@ -22,6 +22,9 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] HTTP Range resume for interrupted weight downloads
 - [x] Post-download BLAKE3 verify (`--skip-verify` to opt out)
 - [x] Stream process while listing (bounded in-flight pool; phase `running`)
+- [x] Disk floor + soft size warn (`--disk-floor-gib`, runner exit 5)
+- [x] Byte download progress (CLI + events)
+- [x] `failed.jsonl` ↔ `eventId` on fail events
 
 ## v0.2 — Filters
 
@@ -64,7 +67,9 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 ## QoL forever
 
-- [ ] Preflight size estimator (TB warning)  
+- [x] Preflight / free-disk floor (`--disk-floor-gib`, soft size warn, exit 5)  
+- [x] Byte-level download progress (CLI + `download_progress` events)  
+- [x] `failed.jsonl` linked to control-plane `eventId`  
 - [ ] Bandwidth / rate limits  
 - [x] Listing cache (opt-in page blobs; `--use-listing-cache` / `--refresh-listing`)  
 - [ ] Better Windows path UX  

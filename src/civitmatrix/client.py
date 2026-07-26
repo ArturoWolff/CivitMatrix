@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator
 import requests
 
 from civitmatrix import __version__
+from civitmatrix.download_progress import DownloadProgress
 
 DownloadEventFn = Callable[[str, dict[str, Any]], None]
 
@@ -140,17 +141,51 @@ class CivitClient:
                     if r.status_code not in (200, 206):
                         r.raise_for_status()
 
+                    # Resolve total size for progress (Content-Length / Range)
+                    start_offset = existing if mode == "ab" else 0
+                    content_len = r.headers.get("Content-Length")
+                    total: int | None = None
+                    if content_len:
+                        try:
+                            cl = int(content_len)
+                            if r.status_code == 206 or start_offset > 0:
+                                total = start_offset + cl
+                            else:
+                                total = cl
+                        except ValueError:
+                            total = None
+                    cr = r.headers.get("Content-Range")  # bytes start-end/total
+                    if cr and "/" in cr:
+                        try:
+                            overall = cr.rsplit("/", 1)[-1]
+                            if overall != "*":
+                                total = int(overall)
+                        except ValueError:
+                            pass
+
+                    prog = DownloadProgress(
+                        path=str(tmp),
+                        label=dest.name,
+                        emit=lambda ev, fields: emit(ev, **fields),
+                        cli=True,
+                    )
+                    if start_offset > 0:
+                        prog.seed_bytes(start_offset)
+                    prog.set_total(total)
+
                     with tmp.open(mode) as f:
                         for chunk in r.iter_content(chunk_size=1024 * 1024):
                             if chunk:
                                 f.write(chunk)
+                                prog.add(len(chunk))
+                    prog.finish()
 
                 tmp.replace(dest)
                 emit(
                     "download_complete",
                     path=str(dest),
                     resumed=existing > 0 and mode == "ab",
-                    bytes= _file_size(dest),
+                    bytes=_file_size(dest),
                 )
                 return
             except (PermissionError, FileNotFoundError):

@@ -87,6 +87,25 @@ class JobState:
                 }
             self._write()
 
+    def update_current_progress(
+        self,
+        *,
+        bytes_done: int | None = None,
+        total: int | None = None,
+        pct: float | None = None,
+    ) -> None:
+        with self._lock:
+            cur = self._data.get("current")
+            if not isinstance(cur, dict):
+                return
+            if bytes_done is not None:
+                cur["bytes"] = int(bytes_done)
+            if total is not None:
+                cur["total"] = int(total) if total else None
+            if pct is not None:
+                cur["pct"] = pct
+            self._write()
+
     def bump(self, key: str, amount: int = 1) -> None:
         with self._lock:
             counts = self._data.setdefault("counts", {})

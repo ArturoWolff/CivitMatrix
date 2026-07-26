@@ -8,6 +8,13 @@ from typing import Any, Iterator
 
 from civitmatrix.cancel_control import CancelGate
 from civitmatrix.client import CivitClient
+from civitmatrix.disk_guard import (
+    below_floor,
+    disk_status,
+    file_size_bytes,
+    floor_bytes_from_gib,
+    format_bytes,
+)
 from civitmatrix.indexer import (
     load_local_index,
     pick_matching_version,
@@ -62,36 +69,32 @@ def process_one(
     job: JobState | None = None,
     resume: bool = True,
     skip_verify: bool = False,
+    disk_floor_bytes: int = 0,
 ) -> str:
     version = pick_matching_version(
         model, base_model, match_base_version=match_base_version
     )
     if not version:
-        logger.record_failure(
+        logger.fail_with_event(
+            job,
             model,
             "no_matching_base_version",
             retryable=False,
             extra={"wantedBaseModel": base_model},
+            **_model_fields(model),
         )
-        if job:
-            job.emit(
-                "fail",
-                reason="no_matching_base_version",
-                retryable=False,
-                **_model_fields(model),
-            )
         return "no_match"
 
     file_info = pick_primary_file(version)
     if not file_info:
-        logger.record_failure(model, "no_files", retryable=False, version=version)
-        if job:
-            job.emit(
-                "fail",
-                reason="no_files",
-                retryable=False,
-                **_model_fields(model, version),
-            )
+        logger.fail_with_event(
+            job,
+            model,
+            "no_files",
+            retryable=False,
+            version=version,
+            **_model_fields(model, version),
+        )
         return "no_files"
 
     blake3 = (file_info.get("hashes") or {}).get("BLAKE3")
@@ -140,6 +143,50 @@ def process_one(
             )
         return "dry_run"
 
+    # Mid-run disk floor
+    if disk_floor_bytes > 0 and below_floor(out_dir, disk_floor_bytes):
+        st = disk_status(out_dir)
+        if job:
+            job.emit(
+                "disk_full",
+                free=st["free"],
+                floor=disk_floor_bytes,
+                path=str(out_dir),
+                **_model_fields(model, version),
+            )
+            job.set_meta(diskFree=st["free"])
+        logger.fail_with_event(
+            job,
+            model,
+            "disk_full",
+            retryable=True,
+            version=version,
+            extra={"free": st["free"], "floor": disk_floor_bytes},
+            event_name="fail",
+            **_model_fields(model, version),
+        )
+        _release_reservation(
+            local_blake3, local_versions, local_stems, blake3, version_id, stem
+        )
+        return "disk_full"
+
+    need = file_size_bytes(file_info)
+    if need is not None:
+        free = disk_status(out_dir)["free"]
+        if need > free and (disk_floor_bytes <= 0 or free >= disk_floor_bytes):
+            if job:
+                job.emit(
+                    "disk_warn",
+                    free=free,
+                    estimate=need,
+                    floor=disk_floor_bytes,
+                    **_model_fields(model, version),
+                )
+            logger.log(
+                f"WARN disk: need ~{format_bytes(need)} free={format_bytes(free)} "
+                f"for model={model['id']}"
+            )
+
     try:
         logger.log(f"DOWNLOAD model={model['id']} ver={version_id} -> {weight_path.name}")
         if job:
@@ -156,6 +203,12 @@ def process_one(
                 logger.log(
                     f"RESUME model={model['id']} ver={version_id} "
                     f"offset={fields.get('offset')} -> {weight_path.name}"
+                )
+            if event == "download_progress" and job:
+                job.update_current_progress(
+                    bytes_done=fields.get("bytes"),
+                    total=fields.get("total"),
+                    pct=fields.get("pct"),
                 )
             if job:
                 job.emit(
@@ -200,7 +253,8 @@ def process_one(
             _release_reservation(
                 local_blake3, local_versions, local_stems, blake3, version_id, stem
             )
-            logger.record_failure(
+            logger.fail_with_event(
+                job,
                 model,
                 "verify_fail",
                 retryable=True,
@@ -211,17 +265,12 @@ def process_one(
                     "remoteBlake3": blake3,
                     "localStem": stem,
                 },
+                event_name="verify_fail",
+                localStem=stem,
+                localBlake3=local_hash,
+                remoteBlake3=blake3,
+                **_model_fields(model, version),
             )
-            if job:
-                job.emit(
-                    "verify_fail",
-                    localStem=stem,
-                    reason=v_reason,
-                    localBlake3=local_hash,
-                    remoteBlake3=blake3,
-                    retryable=True,
-                    **_model_fields(model, version),
-                )
             return "verify_fail"
 
         if preview_url:
@@ -274,21 +323,16 @@ def process_one(
         _release_reservation(
             local_blake3, local_versions, local_stems, blake3, version_id, stem
         )
-        logger.record_failure(
+        logger.fail_with_event(
+            job,
             model,
             "forbidden_or_early_access",
             retryable=True,
             version=version,
             extra={"detail": str(e), "downloadUrl": download_url},
+            detail=str(e),
+            **_model_fields(model, version),
         )
-        if job:
-            job.emit(
-                "fail",
-                reason="forbidden_or_early_access",
-                retryable=True,
-                detail=str(e),
-                **_model_fields(model, version),
-            )
         weight_path.unlink(missing_ok=True)
         preview_tmp.unlink(missing_ok=True)
         return "forbidden"
@@ -296,21 +340,16 @@ def process_one(
         _release_reservation(
             local_blake3, local_versions, local_stems, blake3, version_id, stem
         )
-        logger.record_failure(
+        logger.fail_with_event(
+            job,
             model,
             "not_found",
             retryable=False,
             version=version,
             extra={"detail": str(e)},
+            detail=str(e),
+            **_model_fields(model, version),
         )
-        if job:
-            job.emit(
-                "fail",
-                reason="not_found",
-                retryable=False,
-                detail=str(e),
-                **_model_fields(model, version),
-            )
         weight_path.unlink(missing_ok=True)
         preview_tmp.unlink(missing_ok=True)
         return "not_found"
@@ -318,21 +357,16 @@ def process_one(
         _release_reservation(
             local_blake3, local_versions, local_stems, blake3, version_id, stem
         )
-        logger.record_failure(
+        logger.fail_with_event(
+            job,
             model,
             "download_error",
             retryable=True,
             version=version,
             extra={"detail": repr(e), "downloadUrl": download_url},
+            detail=repr(e),
+            **_model_fields(model, version),
         )
-        if job:
-            job.emit(
-                "fail",
-                reason="download_error",
-                retryable=True,
-                detail=repr(e),
-                **_model_fields(model, version),
-            )
         weight_path.unlink(missing_ok=True)
         info_path.unlink(missing_ok=True)
         preview_tmp.unlink(missing_ok=True)
@@ -375,6 +409,7 @@ def run_batch(
     skip_verify: bool = False,
     use_listing_cache: bool = False,
     refresh_listing: bool = False,
+    disk_floor_gib: float = 2.0,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -382,6 +417,8 @@ def run_batch(
     pause = PauseGate(logs_dir)
     cancel.clear()  # drop stale flags from a previous run
     pause.clear()
+
+    disk_floor_bytes = floor_bytes_from_gib(disk_floor_gib)
 
     job = JobState(logger.job_path)
     job.set_meta(
@@ -396,6 +433,7 @@ def run_batch(
         listingCache=bool(use_listing_cache),
         refreshListing=bool(refresh_listing),
         listingCacheHit=False,
+        diskFloorGib=float(disk_floor_gib),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -442,6 +480,38 @@ def run_batch(
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     diag = index_diagnostics(out_dir)
     logger.log(f"{format_index_log_line(diag)} under {out_dir}")
+
+    st0 = disk_status(out_dir)
+    job.set_meta(diskFree=st0["free"])
+    job.emit(
+        "disk_status",
+        free=st0["free"],
+        total=st0["total"],
+        floor=disk_floor_bytes,
+        path=str(out_dir),
+    )
+    logger.log(
+        f"Disk free={format_bytes(st0['free'])} / total={format_bytes(st0['total'])} "
+        f"floor={format_bytes(disk_floor_bytes) if disk_floor_bytes else 'off'}"
+    )
+    if disk_floor_bytes > 0 and st0["free"] < disk_floor_bytes:
+        job.emit(
+            "disk_full",
+            free=st0["free"],
+            floor=disk_floor_bytes,
+            path=str(out_dir),
+            fatal=True,
+        )
+        job.set_phase("error")
+        logger.log(
+            f"ERROR: free disk {format_bytes(st0['free'])} below floor "
+            f"{format_bytes(disk_floor_bytes)} — aborting (exit 5)"
+        )
+        cancel.clear()
+        pause.clear()
+        lock.release()
+        job.emit("lock_released", lockPath=str(lock.path))
+        return 5
 
     try:
         job.set_phase("running")
@@ -497,6 +567,7 @@ def run_batch(
                 job=job,
                 resume=resume,
                 skip_verify=skip_verify,
+                disk_floor_bytes=disk_floor_bytes,
             )
 
         def on_listed(n: int, model: dict[str, Any]) -> None:
@@ -506,11 +577,12 @@ def run_batch(
                 logger.log(f"Listed {n} models…")
 
         def on_worker_crash(model: dict[str, Any], err: BaseException) -> None:
-            logger.record_failure(model, "worker_crash", extra={"detail": repr(err)})
-            job.emit(
-                "fail",
-                reason="worker_crash",
+            logger.fail_with_event(
+                job,
+                model,
+                "worker_crash",
                 retryable=True,
+                extra={"detail": repr(err)},
                 detail=repr(err),
                 modelId=model.get("id"),
                 modelName=model.get("name"),
@@ -609,6 +681,14 @@ def run_batch(
             logger.log(f"Cancelled. Counts: {json.dumps(counts, sort_keys=True)}")
             logger.log(f"Job status -> {logger.job_path}")
             return 4
+
+        if counts.get("disk_full"):
+            job.emit("run_disk_full", counts=dict(counts), listed=listed)
+            job.set_phase("error")
+            cancel.clear()
+            pause.clear()
+            logger.log(f"Stopped: disk below floor. Counts: {json.dumps(counts, sort_keys=True)}")
+            return 5
 
         job.emit("run_done", counts=dict(counts), listed=listed)
         job.set_phase("done")
