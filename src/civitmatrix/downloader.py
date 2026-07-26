@@ -15,6 +15,13 @@ from civitmatrix.indexer import (
     unique_stem,
 )
 from civitmatrix.job_state import JobState
+from civitmatrix.listing_cache import (
+    ListingCacheWriter,
+    cache_paths,
+    iter_cached_models,
+    make_cache_key,
+    probe_cache,
+)
 from civitmatrix.logging_io import RunLogger, utc_now
 from civitmatrix.heal_library import heal_library
 from civitmatrix.index_health import format_index_log_line, index_diagnostics
@@ -366,6 +373,8 @@ def run_batch(
     keep_partials: bool = False,
     resume: bool = True,
     skip_verify: bool = False,
+    use_listing_cache: bool = False,
+    refresh_listing: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -384,6 +393,9 @@ def run_batch(
         resumePartials=bool(resume),
         skipVerify=bool(skip_verify),
         streamMode=True,
+        listingCache=bool(use_listing_cache),
+        refreshListing=bool(refresh_listing),
+        listingCacheHit=False,
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -528,14 +540,24 @@ def run_batch(
                 on_resume=on_resume_run,
             )
 
+        listing_state: dict[str, Any] = {
+            "writer": None,
+            "exhausted": False,
+            "cache_hit": False,
+        }
+
         model_iter = _iter_models_for_run(
             client,
             logger,
+            job,
+            listing_state,
             retry_failed=retry_failed,
             base_model=base_model,
             model_type=model_type,
             nsfw=nsfw,
             sort=sort,
+            use_listing_cache=use_listing_cache,
+            refresh_listing=refresh_listing,
         )
 
         counts, cancelled, listed = run_streaming_pool(
@@ -548,6 +570,24 @@ def run_batch(
             on_worker_crash=on_worker_crash,
             on_result=on_result,
         )
+
+        writer = listing_state["writer"]
+        if writer is not None:
+            limited = bool(limit) and listed >= limit
+            complete = bool(listing_state["exhausted"]) and not cancelled and not limited
+            meta = writer.finalize(complete=complete)
+            job.emit(
+                "listing_cache_write",
+                key=writer.key,
+                path=str(writer.jsonl_path),
+                complete=complete,
+                pages=meta.get("pages"),
+                items=meta.get("items"),
+            )
+            logger.log(
+                f"Listing cache write complete={complete} "
+                f"pages={meta.get('pages')} items={meta.get('items')}"
+            )
 
         job.set_count("listed", listed)
         if not cancelled:
@@ -587,13 +627,19 @@ def run_batch(
 def _iter_models_for_run(
     client: CivitClient,
     logger: RunLogger,
+    job: JobState,
+    listing_state: dict[str, Any],
     *,
     retry_failed: bool,
     base_model: str,
     model_type: str,
     nsfw: bool,
     sort: str,
+    use_listing_cache: bool = False,
+    refresh_listing: bool = False,
 ) -> Iterator[dict[str, Any]]:
+    logs_dir = logger.job_path.parent
+
     if retry_failed:
         import time
 
@@ -609,18 +655,78 @@ def _iter_models_for_run(
                     extra={"detail": repr(e)},
                 )
             time.sleep(0.2)
+        listing_state["exhausted"] = True
         return
+
+    key_fields = {
+        "baseUrl": client.base_url.rstrip("/"),
+        "baseModel": base_model,
+        "modelType": model_type,
+        "sort": sort,
+        "nsfw": bool(nsfw),
+    }
+    key = make_cache_key(
+        base_url=key_fields["baseUrl"],
+        base_model=key_fields["baseModel"],
+        model_type=key_fields["modelType"],
+        sort=key_fields["sort"],
+        nsfw=key_fields["nsfw"],
+    )
+    use_cache = bool(use_listing_cache)
+    refresh = bool(refresh_listing)
+
+    if use_cache and not refresh:
+        reason, meta = probe_cache(
+            logs_dir,
+            base_url=key_fields["baseUrl"],
+            base_model=key_fields["baseModel"],
+            model_type=key_fields["modelType"],
+            sort=key_fields["sort"],
+            nsfw=key_fields["nsfw"],
+        )
+        if reason == "ok" and meta is not None:
+            _, jsonl = cache_paths(logs_dir, key)
+            listing_state["cache_hit"] = True
+            job.set_meta(listingCacheHit=True)
+            job.emit(
+                "listing_cache_hit",
+                key=key,
+                items=meta.get("items"),
+                pages=meta.get("pages"),
+                path=str(jsonl),
+            )
+            logger.log(f"Listing cache hit ({meta.get('items')} items) → {jsonl}")
+            for model in iter_cached_models(jsonl):
+                yield model
+            listing_state["exhausted"] = True
+            return
+        job.emit("listing_cache_miss", key=key, reason=reason)
+        logger.log(f"Listing cache miss ({reason}); fetching from API")
+    elif refresh:
+        job.emit("listing_cache_miss", key=key, reason="refresh")
 
     logger.log(
         f"Listing {model_type} for base={base_model!r} sort={sort!r} "
         f"from {client.base_url} …"
     )
+    writer = None
+    if use_cache:
+        writer = ListingCacheWriter(logs_dir, key=key, key_fields=key_fields)
+        writer.begin()
+        listing_state["writer"] = writer
+
+    def on_page(*, page: int, next_page: str | None, items: list) -> None:
+        if writer is not None:
+            writer.append_page(page=page, next_page=next_page, items=items)
+
     yield from client.iter_models(
         base_model=base_model,
         model_type=model_type,
         nsfw=nsfw,
         sort=sort,
+        on_page=on_page,
     )
+    listing_state["exhausted"] = True
 
 
 def run_heal(

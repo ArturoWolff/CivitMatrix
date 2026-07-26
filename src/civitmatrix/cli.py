@@ -166,6 +166,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--use-listing-cache",
+        action="store_true",
+        help="Opt in: reuse complete listing cache or build one while listing",
+    )
+    p.add_argument(
+        "--refresh-listing",
+        action="store_true",
+        help="Force fresh listing from API (with --use-listing-cache, rewrite cache)",
+    )
+    p.add_argument(
         "--purge-orphans",
         action="store_true",
         help="With --heal, delete .cm-info/preview that have no matching weight",
@@ -252,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
         keep_partials=keep_partials,
         resume=resume_partials,
         skip_verify=skip_verify,
+        use_listing_cache=bool(args.use_listing_cache),
+        refresh_listing=bool(args.refresh_listing),
     )
 
 
