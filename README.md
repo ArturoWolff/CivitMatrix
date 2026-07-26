@@ -146,6 +146,11 @@ No API key needed for these:
 ./run.sh --pause               # finish in-flight file, then wait
 ./run.sh --resume              # continue
 ./run.sh --cancel              # cooperative stop (exit 4); Ctrl+C does the same
+
+# Fix incomplete sidecars / orphans in an existing library
+./run.sh --heal --dry-run
+./run.sh --heal
+./run.sh --heal --purge-orphans
 ```
 
 Full walkthrough: [docs/GUIDE.md](docs/GUIDE.md) · Filters: [docs/FILTERS.md](docs/FILTERS.md)

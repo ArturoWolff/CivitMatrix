@@ -17,6 +17,8 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Cooperative `--pause` / `--resume`
 - [x] `--status` / `--status --json` with stable exit codes
 - [x] On start: purge stale `*.partial` / preview download temps (`--keep-partials` to skip)
+- [x] `--heal` library consolidate (BLAKE3 by-hash sidecars, orphan purge, bad-weight repair)
+- [x] Richer local index log (missingBlake3 / orphanInfo / …)
 
 ## v0.2 — Filters
 
@@ -54,6 +56,7 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 - [ ] HTTP **Range** resume when `--keep-partials` left bytes behind  
 - [ ] Recovery events already include `partial_purged`; add `download_resume`  
+- [ ] Post-download BLAKE3 verify against CivitAI file hash  
 - [ ] Safe restart mid-catalog without re-downloading verified files  
 
 ## QoL forever

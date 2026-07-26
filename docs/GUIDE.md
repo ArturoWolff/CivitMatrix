@@ -154,6 +154,28 @@ On the next run (after acquiring the lock), CivitMatrix **deletes** top-level st
 
 HTTP Range resume of kept partials is a follow-up feature.
 
+## Library heal (`--heal`)
+
+If index counts don’t match (`blake3` / `versions` / `stems`), some files are missing metadata or have orphan sidecars. Heal consolidates the folder:
+
+```bash
+./run.sh --heal --dry-run          # report what would change
+./run.sh --heal                    # repair incomplete .cm-info.json (+ preview)
+./run.sh --heal --purge-orphans    # also delete sidecars with no matching weight
+```
+
+What it does:
+
+1. Scans `--out` for incomplete sidecars (missing ModelId / VersionId / BLAKE3)
+2. Hashes those weights (BLAKE3), looks up `GET /api/v1/model-versions/by-hash/{hash}`  
+   (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
+3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3) and fetches a preview when missing
+4. Deletes empty/corrupt weights; re-downloads when a VersionId is known
+5. Orphan sidecars (no weight): re-download if VersionId known, else report — or delete with `--purge-orphans`
+
+Normal batch runs also print a richer index line, e.g.  
+`Local index: 7156 blake3, 7162 versions, 7163 stems (missingBlake3=7, orphanInfo=2)`.
+
 ## Security
 
 - Keep API keys in `.env` only (gitignored)  

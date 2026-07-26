@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from civitmatrix import __version__
 from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
-from civitmatrix.downloader import run_batch
+from civitmatrix.downloader import run_batch, run_heal
 from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import print_status_cli
@@ -126,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print logs/job.json status (use --json for machine output)",
     )
+    ctrl.add_argument(
+        "--heal",
+        action="store_true",
+        help="Consolidate library: repair sidecars, fix bad/missing weights",
+    )
     p.add_argument(
         "--json",
         action="store_true",
@@ -139,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Keep stale *.partial / preview download temps on start "
             "(default: env KEEP_PARTIALS or false — purge them)"
         ),
+    )
+    p.add_argument(
+        "--purge-orphans",
+        action="store_true",
+        help="With --heal, delete .cm-info/preview that have no matching weight",
     )
     return p
 
@@ -187,6 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     client = CivitClient(base_url, api_key)
+    if args.heal:
+        return run_heal(
+            client=client,
+            out_dir=out_dir,
+            logger=logger,
+            dry_run=args.dry_run,
+            purge_orphans=bool(args.purge_orphans),
+            keep_partials=keep_partials,
+        )
     return run_batch(
         client=client,
         out_dir=out_dir,

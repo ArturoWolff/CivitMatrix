@@ -58,6 +58,15 @@ class CivitClient:
     def get_model(self, model_id: int) -> dict[str, Any]:
         return self.get_json(f"{self.base_url}/api/v1/models/{model_id}")
 
+    def get_version_by_hash(self, file_hash: str) -> dict[str, Any] | None:
+        url = f"{self.base_url}/api/v1/model-versions/by-hash/{file_hash}"
+        r = self.session.get(url, timeout=self.timeout)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else None
+
     def download(self, url: str, dest: Path, max_retries: int = 5) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".partial")

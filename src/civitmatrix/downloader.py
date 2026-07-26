@@ -17,6 +17,8 @@ from civitmatrix.indexer import (
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.heal_library import heal_library
+from civitmatrix.index_health import format_index_log_line, index_diagnostics
 from civitmatrix.partial_sweep import purge_stale_partials
 from civitmatrix.pause_control import PauseGate
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
@@ -340,10 +342,8 @@ def run_batch(
             logger.log(f"Purged {len(removed)} stale partial file(s)")
 
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
-    logger.log(
-        f"Local index: {len(local_blake3)} blake3, {len(local_versions)} versions, "
-        f"{len(local_stems)} stems under {out_dir}"
-    )
+    diag = index_diagnostics(out_dir)
+    logger.log(f"{format_index_log_line(diag)} under {out_dir}")
 
     models: list[dict[str, Any]] = []
     cancelled = False
@@ -544,6 +544,116 @@ def run_batch(
         logger.log(
             "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
         )
+        return 0
+    except Exception:
+        job.emit("run_error")
+        job.set_phase("error")
+        raise
+    finally:
+        lock.release()
+        job.emit("lock_released", lockPath=str(lock.path))
+
+
+def run_heal(
+    *,
+    client: CivitClient,
+    out_dir: Path,
+    logger: RunLogger,
+    dry_run: bool,
+    purge_orphans: bool,
+    keep_partials: bool = False,
+) -> int:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = logger.job_path.parent
+    cancel = CancelGate(logs_dir)
+    pause = PauseGate(logs_dir)
+    cancel.clear()
+    pause.clear()
+
+    job = JobState(logger.job_path)
+    job.set_meta(dryRun=bool(dry_run), outDir=str(out_dir), mode="heal")
+    cancel.install_sigint(lambda: job.run_id)
+
+    def _pause_hooks(resume_phase: str) -> tuple[Any, Any]:
+        def on_pause() -> None:
+            job.emit("pause_requested", source=pause.source, phase=resume_phase)
+            job.set_phase("paused")
+            job.emit("paused")
+            logger.log(f"Paused (phase was {resume_phase}). Waiting for --resume …")
+
+        def on_resume() -> None:
+            job.emit("resumed", phase=resume_phase)
+            job.set_phase(resume_phase)
+            logger.log(f"Resumed → {resume_phase}")
+
+        return on_pause, on_resume
+
+    try:
+        lock = RunLock.acquire(out_dir, job.run_id)
+    except RunLockError as e:
+        job.emit("lock_denied", detail=str(e), **e.lock_info)
+        job.set_phase("error")
+        logger.log(f"ERROR: {e}")
+        return 3
+
+    job.emit("lock_acquired", lockPath=str(lock.path), pid=os.getpid())
+    job.set_meta(lockPath=str(lock.path))
+
+    try:
+        if keep_partials:
+            job.emit("partial_sweep_skipped", reason="keep_partials")
+        else:
+            removed = purge_stale_partials(out_dir)
+            job.set_count("partialsPurged", len(removed))
+            job.emit(
+                "partial_purged",
+                count=len(removed),
+                sample=[p.name for p in removed[:20]],
+            )
+            if removed:
+                logger.log(f"Purged {len(removed)} stale partial file(s)")
+
+        diag = index_diagnostics(out_dir)
+        logger.log(f"{format_index_log_line(diag)} under {out_dir}")
+
+        on_pause_h, on_resume_h = _pause_hooks("healing")
+
+        def _cancel() -> bool:
+            return cancel.is_requested()
+
+        def _pause() -> bool:
+            return pause.wait_if_paused(
+                cancel,
+                resume_phase="healing",
+                on_pause=on_pause_h,
+                on_resume=on_resume_h,
+            )
+
+        counts = heal_library(
+            client=client,
+            out_dir=out_dir,
+            build_cm_info=build_cm_info,
+            log=logger.log,
+            job=job,
+            dry_run=dry_run,
+            purge_orphans=purge_orphans,
+            cancel_check=_cancel,
+            pause_wait=_pause,
+        )
+        if counts.get("cancelled"):
+            job.set_phase("cancelled")
+            cancel.clear()
+            pause.clear()
+            logger.log(f"Heal cancelled. Counts: {json.dumps(counts, sort_keys=True)}")
+            return 4
+
+        job.set_phase("done")
+        cancel.clear()
+        pause.clear()
+        diag2 = index_diagnostics(out_dir)
+        logger.log(f"Heal done. Counts: {json.dumps(counts, sort_keys=True)}")
+        logger.log(f"After heal: {format_index_log_line(diag2)}")
+        logger.log("Refresh Stability Matrix model index if Installed badges look stale.")
         return 0
     except Exception:
         job.emit("run_error")
