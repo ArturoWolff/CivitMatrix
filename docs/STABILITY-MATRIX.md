@@ -16,7 +16,7 @@ For each model version:
 |------|------|
 | `{stem}.safetensors` | Weights (hash identity) |
 | `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags) |
-| `{stem}.preview.jpeg` | Thumbnail SM / UIs can show |
+| `{stem}.preview.*` | Preview / thumbnail — extension matches content (`.jpeg`, `.png`, `.webp`, `.mp4`, …) |
 
 The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, etc.).
 

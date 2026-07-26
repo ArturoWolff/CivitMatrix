@@ -33,8 +33,9 @@ CivitMatrix:
 1. Lists models from the CivitAI API (any base model / type — Anima LoRAs are the showcase default)
 2. Picks the newest version that matches your base model
 3. Downloads weights into your SM Models folder
-4. Writes **SM-native sidecars**: `.cm-info.json` + preview image
+4. Writes **SM-native sidecars**: `.cm-info.json` + preview (extension matches real media type)
 5. Skips what you already have; logs failures for later retries
+6. Exposes a **live control plane** (`job.json`, cancel / pause / status) for long runs and a future UI
 
 <p align="center">
   <img src="assets/demo-terminal.svg" alt="Terminal demo" width="92%" />
@@ -134,6 +135,18 @@ Examples:
 ./run.sh --retry-failed
 ```
 
+### Control a long run (second terminal)
+
+No API key needed for these:
+
+```bash
+./run.sh --status              # human summary of logs/job.json
+./run.sh --status --json       # machine-readable snapshot
+./run.sh --pause               # finish in-flight file, then wait
+./run.sh --resume              # continue
+./run.sh --cancel              # cooperative stop (exit 4); Ctrl+C does the same
+```
+
 Full walkthrough: [docs/GUIDE.md](docs/GUIDE.md) · Filters: [docs/FILTERS.md](docs/FILTERS.md)
 
 ---
@@ -146,7 +159,7 @@ Downloads land as:
 YourModels/Lora/
   my-lora.safetensors
   my-lora.cm-info.json
-  my-lora.preview.jpeg
+  my-lora.preview.png    # or .jpeg / .webp / .mp4 — sniffed from content
 ```
 
 That matches what SM writes when you download from its browser — so hashes index cleanly and connected metadata (triggers, version ids, etc.) stays available.
@@ -155,13 +168,20 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 
 ---
 
-## Logs for retries & future sorting
+## Logs & control plane
 
 | File | Purpose |
 |------|---------|
+| `logs/job.json` | Live phase, counts, current model, timestamps |
+| `logs/events.jsonl` | Structured diary (`run_start`, `download_*`, `fail`, `paused`, …) |
 | `logs/failed.jsonl` | Failures with `retryable` flag — feed `--retry-failed` |
 | `logs/manifest.jsonl` | Success rows + `sortHints` for upcoming categorizing |
 | `logs/run.log` | Console transcript |
+| `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
+| `<out>/.civitmatrix.lock` | One writer per output folder |
+
+**`--status` exit codes:** `0` done · `1` missing job · `2` error · `4` cancelled · `5` paused · `6` active  
+**Runner exits:** `0` ok · `2` missing API key · `3` lock busy · `4` cancelled · `130` forced second Ctrl+C
 
 ---
 
@@ -169,7 +189,7 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 
 - **Filters** — tags, min downloads, base-only, creators  
 - **Categorizing** — auto-bucket into characters / styles / concepts / clothes  
-- **GUI** — local queue + progress + folder picker  
+- **GUI** — local Win95-flavored browser UI polling the control plane  
 - **Deeper SM hooks** — index refresh helpers, update-only mode  
 
 See the full plan: [ROADMAP.md](ROADMAP.md)

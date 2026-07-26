@@ -84,6 +84,62 @@ CLI overrides env for a single run:
 5. `./run.sh --retry-failed` later  
 6. Refresh SM index  
 
+## Control plane (long runs)
+
+While a batch is running, open a **second terminal** in the same repo folder:
+
+| Command | Effect |
+|---------|--------|
+| `./run.sh --status` | Print phase, counts, current model, flags, lock |
+| `./run.sh --status --json` | Same data as JSON (for scripts / future UI) |
+| `./run.sh --pause` | Finish the current download, then wait |
+| `./run.sh --resume` | Clear pause and continue |
+| `./run.sh --cancel` | Cooperative stop after in-flight work |
+| `Ctrl+C` (in the runner) | Same as `--cancel`; second Ctrl+C force-exits |
+
+These commands do **not** need `CIVITAI_API_KEY`. They read/write under `logs/`:
+
+- `job.json` — live status (`phase`: `listing` · `downloading` · `paused` · `done` · `cancelled` · `error`)
+- `events.jsonl` — append-only event stream
+- `cancel.request` / `pause.request` — request flags
+- Output folder gets `.civitmatrix.lock` so two writers don’t collide
+
+### `--status` exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | `done` |
+| 1 | missing / unreadable `job.json` |
+| 2 | `error` |
+| 4 | `cancelled` |
+| 5 | `paused` |
+| 6 | active (`starting` / `listing` / `downloading`) |
+
+### Runner exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | success |
+| 2 | missing API key |
+| 3 | another run holds the output-folder lock |
+| 4 | cooperative cancel |
+| 130 | forced exit (second Ctrl+C) |
+
+### Fish shell note
+
+`source .venv/bin/activate` is bash-only. Prefer:
+
+```fish
+source .venv/bin/activate.fish
+# or
+./run.sh --status
+```
+
+## Preview files
+
+Previews are saved with an extension that matches **file content** (magic bytes), not always `.jpeg`.  
+Still images prefer the API image URL; video previews become `.preview.mp4`.
+
 ## Security
 
 - Keep API keys in `.env` only (gitignored)  

@@ -6,10 +6,16 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 - [x] Cross-platform CLI (`python -m civitmatrix`, `run.sh`, `run.ps1`)
 - [x] Stability Matrix–native sidecars (`.cm-info.json` + preview)
+- [x] Preview extension from content (JPEG / PNG / WebP / MP4, …)
 - [x] BLAKE3 / version skip + resume
 - [x] `failed.jsonl` + `manifest.jsonl` (with `sortHints`)
 - [x] Configurable base model, type, sort, NSFW, concurrency
 - [x] Showcase defaults for Anima LoRAs
+- [x] Live control plane: `logs/job.json` + `logs/events.jsonl`
+- [x] Exclusive output-dir lock (`.civitmatrix.lock`)
+- [x] Cooperative `--cancel` / Ctrl+C (exit 4)
+- [x] Cooperative `--pause` / `--resume`
+- [x] `--status` / `--status --json` with stable exit codes
 
 ## v0.2 — Filters
 
@@ -29,8 +35,9 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 ## v0.4 — GUI
 
-- [ ] Local desktop or lightweight web UI  
-- [ ] Queue, progress bars, pause / resume  
+- [ ] Lightweight local **browser** UI (Win95-flavored; no Electron)  
+- [ ] Poll `job.json` / `events.jsonl` only (control plane already shipped)  
+- [ ] Queue view + progress; wire Start / Cancel / Pause / Resume  
 - [ ] Visual filter builder  
 - [ ] Folder picker for SM Models paths  
 - [ ] Failure browser with one-click retry

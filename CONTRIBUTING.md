@@ -20,6 +20,7 @@ python -m civitmatrix --dry-run --limit 3
 - Do not commit secrets, logs, or downloaded weights.
 - Prefer small PRs aligned with [ROADMAP.md](ROADMAP.md).
 - SM sidecar shape is a compatibility contract — change it carefully.
+- **Ship docs with features:** update `README.md`, `docs/GUIDE.md`, and `ROADMAP.md` in the same change (or immediately after) so GitHub stays current.
 
 ## Code of conduct
 
