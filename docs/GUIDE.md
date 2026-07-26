@@ -206,11 +206,20 @@ After each weight download (including Range resume), CivitMatrix hashes the file
 | Mismatch | delete weight; `verify_fail` (retryable); no sidecar |
 | No remote hash | `verify_skipped` (`no_remote_hash`); file kept |
 | `--skip-verify` | `verify_skipped` (`flag`); file kept |
+| Stale API BLAKE3 but `by-hash(local)` matches version | `verify_ok_stale_meta`; file kept |
 
 ```bash
 ./run.sh                      # verify on (default)
 ./run.sh --skip-verify        # opt out
 ```
+
+## Latest-only versions (default)
+
+CivitMatrix keeps **one version per model**: the newest matching base-model version.
+
+- After `skip_hash` / `skip_version` / successful download+verify, older local stems with the same `ModelId` (weight + `.cm-info.json` + preview) are deleted.
+- Event: `prune_old_version`; job count: `pruned`.
+- Opt out: `./run.sh --keep-old-versions`
 
 ## Library heal (`--heal`)
 

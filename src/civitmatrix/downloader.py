@@ -43,6 +43,7 @@ from civitmatrix.verify_blake3 import (
     verify_weight_blake3,
     version_matches_local_hash,
 )
+from civitmatrix.version_prune import prune_old_versions
 
 _index_lock = threading.Lock()
 
@@ -56,6 +57,55 @@ def _model_fields(model: dict[str, Any], version: dict[str, Any] | None = None) 
         fields["versionId"] = version.get("id")
         fields["baseModel"] = version.get("baseModel")
     return fields
+
+
+def maybe_prune_old_versions(
+    *,
+    enabled: bool,
+    dry_run: bool,
+    out_dir: Path,
+    model: dict[str, Any],
+    version: dict[str, Any],
+    version_id: int,
+    local_blake3: set[str],
+    local_versions: set[int],
+    local_stems: set[str],
+    logger: RunLogger,
+    job: JobState | None,
+) -> int:
+    if not enabled or dry_run:
+        return 0
+    mid = model.get("id")
+    if mid is None:
+        return 0
+    try:
+        model_id = int(mid)
+    except (TypeError, ValueError):
+        return 0
+    pruned = prune_old_versions(
+        out_dir,
+        model_id,
+        version_id,
+        local_blake3=local_blake3,
+        local_versions=local_versions,
+        local_stems=local_stems,
+        index_lock=_index_lock,
+    )
+    for cand in pruned:
+        logger.log(
+            f"PRUNE old version model={model_id} ver={cand.get('versionId')} "
+            f"stem={cand.get('stem')} keep={version_id}"
+        )
+        if job:
+            job.emit(
+                "prune_old_version",
+                localStem=cand.get("stem"),
+                versionId=cand.get("versionId"),
+                keepVersionId=version_id,
+                **_model_fields(model, version),
+            )
+            job.bump("pruned")
+    return len(pruned)
 
 
 def process_one(
@@ -74,6 +124,7 @@ def process_one(
     resume: bool = True,
     skip_verify: bool = False,
     disk_floor_bytes: int = 0,
+    keep_old_versions: bool = False,
 ) -> str:
     version = pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -103,21 +154,41 @@ def process_one(
 
     blake3 = (file_info.get("hashes") or {}).get("BLAKE3")
     version_id = int(version["id"])
+    skip_reason: str | None = None
+    stem = ""
+    remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
     with _index_lock:
         if blake3 and blake3.upper() in local_blake3:
-            if job:
-                job.emit("skip_hash", blake3=blake3, **_model_fields(model, version))
-            return "skip_hash"
-        if version_id in local_versions:
-            if job:
-                job.emit("skip_version", **_model_fields(model, version))
-            return "skip_version"
-        remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
-        stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
-        local_stems.add(stem.lower())
-        local_versions.add(version_id)
-        if blake3:
-            local_blake3.add(blake3.upper())
+            skip_reason = "skip_hash"
+        elif version_id in local_versions:
+            skip_reason = "skip_version"
+        else:
+            stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
+            local_stems.add(stem.lower())
+            local_versions.add(version_id)
+            if blake3:
+                local_blake3.add(blake3.upper())
+
+    if skip_reason:
+        if job:
+            fields = dict(_model_fields(model, version))
+            if skip_reason == "skip_hash" and blake3:
+                fields["blake3"] = blake3
+            job.emit(skip_reason, **fields)
+        maybe_prune_old_versions(
+            enabled=not keep_old_versions,
+            dry_run=dry_run,
+            out_dir=out_dir,
+            model=model,
+            version=version,
+            version_id=version_id,
+            local_blake3=local_blake3,
+            local_versions=local_versions,
+            local_stems=local_stems,
+            logger=logger,
+            job=job,
+        )
+        return skip_reason
 
     weight_path = out_dir / f"{stem}.safetensors"
     info_path = out_dir / f"{stem}.cm-info.json"
@@ -381,6 +452,19 @@ def process_one(
                 previewPath=str(preview_path) if preview_path is not None else None,
                 **_model_fields(model, version),
             )
+        maybe_prune_old_versions(
+            enabled=not keep_old_versions,
+            dry_run=False,
+            out_dir=out_dir,
+            model=model,
+            version=version,
+            version_id=version_id,
+            local_blake3=local_blake3,
+            local_versions=local_versions,
+            local_stems=local_stems,
+            logger=logger,
+            job=job,
+        )
         return "ok"
     except PermissionError as e:
         _release_reservation(
@@ -473,6 +557,7 @@ def run_batch(
     use_listing_cache: bool = False,
     refresh_listing: bool = False,
     disk_floor_gib: float = 2.0,
+    keep_old_versions: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -645,6 +730,7 @@ def run_batch(
                 resume=resume,
                 skip_verify=skip_verify,
                 disk_floor_bytes=disk_floor_bytes,
+                keep_old_versions=keep_old_versions,
             )
 
         def on_listed(n: int, model: dict[str, Any]) -> None:

@@ -166,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--keep-old-versions",
+        action="store_true",
+        help="Do not delete older local versions of the same model when a newer one is kept",
+    )
+    p.add_argument(
         "--use-listing-cache",
         action="store_true",
         help="Opt in: reuse complete listing cache or build one while listing",
@@ -278,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         use_listing_cache=bool(args.use_listing_cache),
         refresh_listing=bool(args.refresh_listing),
         disk_floor_gib=disk_floor_gib,
+        keep_old_versions=bool(args.keep_old_versions),
     )
 
 
