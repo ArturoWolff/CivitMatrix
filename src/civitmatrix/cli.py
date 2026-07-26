@@ -11,6 +11,7 @@ from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
 from civitmatrix.downloader import run_batch
 from civitmatrix.logging_io import RunLogger
+from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 
 SORT_CHOICES = [
     "Highest Rated",
@@ -103,10 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: env MATCH_BASE_VERSION or true)"
         ),
     )
-    p.add_argument(
+    ctrl = p.add_mutually_exclusive_group()
+    ctrl.add_argument(
         "--cancel",
         action="store_true",
         help="Request cooperative cancel of the active run (writes logs/cancel.request)",
+    )
+    ctrl.add_argument(
+        "--pause",
+        action="store_true",
+        help="Request pause after in-flight work (writes logs/pause.request)",
+    )
+    ctrl.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a paused run (clears logs/pause.request)",
     )
     return p
 
@@ -121,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     logs_dir = root / "logs"
     if args.cancel:
         return request_cancel_cli(logs_dir, logs_dir / "job.json")
+    if args.pause:
+        return request_pause_cli(logs_dir, logs_dir / "job.json")
+    if args.resume:
+        return request_resume_cli(logs_dir, logs_dir / "job.json")
 
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
     logger = RunLogger(logs_dir)

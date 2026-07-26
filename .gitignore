@@ -32,6 +32,8 @@ logs/job.json
 logs/job.json.tmp
 logs/cancel.request
 logs/cancel.request.tmp
+logs/pause.request
+logs/pause.request.tmp
 !logs/.gitkeep
 downloads/
 *.partial

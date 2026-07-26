@@ -17,6 +17,7 @@ from civitmatrix.indexer import (
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.pause_control import PauseGate
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
@@ -284,8 +285,11 @@ def run_batch(
     retry_failed: bool,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
-    cancel = CancelGate(logger.job_path.parent)
-    cancel.clear()  # drop stale flag from a previous run
+    logs_dir = logger.job_path.parent
+    cancel = CancelGate(logs_dir)
+    pause = PauseGate(logs_dir)
+    cancel.clear()  # drop stale flags from a previous run
+    pause.clear()
 
     job = JobState(logger.job_path)
     job.set_meta(
@@ -296,6 +300,20 @@ def run_batch(
         outDir=str(out_dir),
     )
     cancel.install_sigint(lambda: job.run_id)
+
+    def _pause_hooks(resume_phase: str) -> tuple[Any, Any]:
+        def on_pause() -> None:
+            job.emit("pause_requested", source=pause.source, phase=resume_phase)
+            job.set_phase("paused")
+            job.emit("paused")
+            logger.log(f"Paused (phase was {resume_phase}). Waiting for --resume …")
+
+        def on_resume() -> None:
+            job.emit("resumed", phase=resume_phase)
+            job.set_phase(resume_phase)
+            logger.log(f"Resumed → {resume_phase}")
+
+        return on_pause, on_resume
 
     try:
         lock = RunLock.acquire(out_dir, job.run_id)
@@ -323,7 +341,13 @@ def run_batch(
             logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
             import time
 
+            on_pause, on_resume = _pause_hooks("listing")
             for mid in ids:
+                if pause.wait_if_paused(
+                    cancel, resume_phase="listing", on_pause=on_pause, on_resume=on_resume
+                ):
+                    cancelled = True
+                    break
                 if cancel.is_requested():
                     cancelled = True
                     break
@@ -342,6 +366,7 @@ def run_batch(
                 f"Listing {model_type} for base={base_model!r} sort={sort!r} "
                 f"from {client.base_url} …"
             )
+            on_pause, on_resume = _pause_hooks("listing")
             for i, model in enumerate(
                 client.iter_models(
                     base_model=base_model,
@@ -351,6 +376,11 @@ def run_batch(
                 ),
                 1,
             ):
+                if pause.wait_if_paused(
+                    cancel, resume_phase="listing", on_pause=on_pause, on_resume=on_resume
+                ):
+                    cancelled = True
+                    break
                 if cancel.is_requested():
                     cancelled = True
                     break
@@ -375,6 +405,7 @@ def run_batch(
             job.emit("run_cancelled", counts={}, listed=len(models))
             job.set_phase("cancelled")
             cancel.clear()
+            pause.clear()
             logger.log(f"Cancelled during listing after {len(models)} models.")
             return 4
 
@@ -386,9 +417,28 @@ def run_batch(
         counts: dict[str, int] = {}
         counts_lock = threading.Lock()
         cancel_logged = False
+        on_pause_dl, on_resume_dl = _pause_hooks("downloading")
 
         def worker(model: dict[str, Any]) -> str:
             nonlocal cancel_logged
+            if pause.wait_if_paused(
+                cancel,
+                resume_phase="downloading",
+                on_pause=on_pause_dl,
+                on_resume=on_resume_dl,
+            ):
+                with counts_lock:
+                    if not cancel_logged:
+                        job.emit(
+                            "cancel_requested",
+                            source=cancel.source,
+                            phase="downloading",
+                        )
+                        cancel_logged = True
+                    counts["cancelled"] = counts.get("cancelled", 0) + 1
+                    job.set_count("cancelled", counts["cancelled"])
+                    job.set_count("processed", sum(counts.values()))
+                return "cancelled"
             if cancel.is_requested():
                 with counts_lock:
                     if not cancel_logged:
@@ -464,6 +514,7 @@ def run_batch(
             job.emit("run_cancelled", counts=dict(counts))
             job.set_phase("cancelled")
             cancel.clear()
+            pause.clear()
             logger.log(f"Cancelled. Counts: {json.dumps(counts, sort_keys=True)}")
             logger.log(f"Job status -> {logger.job_path}")
             return 4
@@ -471,6 +522,7 @@ def run_batch(
         job.emit("run_done", counts=dict(counts))
         job.set_phase("done")
         cancel.clear()
+        pause.clear()
         logger.log(f"Done. Counts: {json.dumps(counts, sort_keys=True)}")
         logger.log(f"Failures -> {logger.failed_path}")
         logger.log(f"Manifest -> {logger.manifest_path}")
