@@ -102,10 +102,12 @@ While a batch is running, open a **second terminal** in the same repo folder:
 
 These commands do **not** need `CIVITAI_API_KEY`. They read/write under `logs/`:
 
-- `job.json` — live status (`phase`: `listing` · `downloading` · `paused` · `done` · `cancelled` · `error`)
-- `events.jsonl` — append-only event stream
+- `job.json` — live status (`phase`: `running` · `paused` · `done` · `cancelled` · `error`; legacy `listing` / `downloading` still recognized)
+- `events.jsonl` — append-only event stream (`stream_start`, `listing_progress`, …)
 - `cancel.request` / `pause.request` — request flags
 - Output folder gets `.civitmatrix.lock` so two writers don’t collide
+
+Batch runs **stream** models as API pages arrive (phase `running`, `streamMode: true` in `job.json`). Workers stay bounded (`concurrency * 2` in flight) so large catalogs are not held in RAM. Skip / Range resume / BLAKE3 verify still apply per model — restarting a run does not re-download already verified files.
 
 ### `--status` exit codes
 
@@ -116,7 +118,7 @@ These commands do **not** need `CIVITAI_API_KEY`. They read/write under `logs/`:
 | 2 | `error` |
 | 4 | `cancelled` |
 | 5 | `paused` |
-| 6 | active (`starting` / `listing` / `downloading`) |
+| 6 | active (`starting` / `running` / `listing` / `downloading` / `healing`) |
 
 ### Runner exit codes
 

@@ -21,6 +21,7 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Richer local index log (missingBlake3 / orphanInfo / …)
 - [x] HTTP Range resume for interrupted weight downloads
 - [x] Post-download BLAKE3 verify (`--skip-verify` to opt out)
+- [x] Stream process while listing (bounded in-flight pool; phase `running`)
 
 ## v0.2 — Filters
 
@@ -59,13 +60,13 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] HTTP **Range** resume for `*.safetensors.partial` (`download_resume` / `--no-resume-partials`)  
 - [x] Start sweep keeps weight partials; purges preview temps (`partial_purged`)  
 - [x] Post-download BLAKE3 verify against CivitAI file hash  
-- [ ] Safe restart mid-catalog without re-downloading verified files  
+- [x] Safe restart mid-catalog without re-downloading verified files (stream + skip/index)
 
 ## QoL forever
 
 - [ ] Preflight size estimator (TB warning)  
 - [ ] Bandwidth / rate limits  
-- [ ] Parallel listing cache  
+- [ ] Listing cache (pages/cursors; resume after crash)  
 - [ ] Better Windows path UX  
 - [ ] Translations
 

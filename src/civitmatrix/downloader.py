@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from civitmatrix.cancel_control import CancelGate
 from civitmatrix.client import CivitClient
@@ -24,6 +23,7 @@ from civitmatrix.pause_control import PauseGate
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.run_lock import RunLock, RunLockError
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
+from civitmatrix.stream_run import run_streaming_pool
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
 
 _index_lock = threading.Lock()
@@ -383,6 +383,7 @@ def run_batch(
         outDir=str(out_dir),
         resumePartials=bool(resume),
         skipVerify=bool(skip_verify),
+        streamMode=True,
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -430,112 +431,34 @@ def run_batch(
     diag = index_diagnostics(out_dir)
     logger.log(f"{format_index_log_line(diag)} under {out_dir}")
 
-    models: list[dict[str, Any]] = []
-    cancelled = False
     try:
-        job.set_phase("listing")
-        if retry_failed:
-            ids = logger.load_failed_model_ids()
-            logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
-            import time
-
-            on_pause, on_resume = _pause_hooks("listing")
-            for mid in ids:
-                if pause.wait_if_paused(
-                    cancel, resume_phase="listing", on_pause=on_pause, on_resume=on_resume
-                ):
-                    cancelled = True
-                    break
-                if cancel.is_requested():
-                    cancelled = True
-                    break
-                try:
-                    models.append(client.get_model(mid))
-                except Exception as e:
-                    logger.record_failure(
-                        {"id": mid, "name": None},
-                        "retry_fetch_failed",
-                        extra={"detail": repr(e)},
-                    )
-                time.sleep(0.2)
-            job.set_count("listed", len(models))
-        else:
-            logger.log(
-                f"Listing {model_type} for base={base_model!r} sort={sort!r} "
-                f"from {client.base_url} …"
-            )
-            on_pause, on_resume = _pause_hooks("listing")
-            for i, model in enumerate(
-                client.iter_models(
-                    base_model=base_model,
-                    model_type=model_type,
-                    nsfw=nsfw,
-                    sort=sort,
-                ),
-                1,
-            ):
-                if pause.wait_if_paused(
-                    cancel, resume_phase="listing", on_pause=on_pause, on_resume=on_resume
-                ):
-                    cancelled = True
-                    break
-                if cancel.is_requested():
-                    cancelled = True
-                    break
-                models.append(model)
-                if i % 50 == 0:
-                    job.set_count("listed", i)
-                    job.emit("listing_progress", listed=i)
-                    logger.log(f"Listed {i} models…")
-                if limit and i >= limit:
-                    break
-            job.set_count("listed", len(models))
-            if not cancelled:
-                job.emit("listing_done", listed=len(models))
-
-        if cancelled:
-            job.emit(
-                "cancel_requested",
-                source=cancel.source,
-                phase="listing",
-                listed=len(models),
-            )
-            job.emit("run_cancelled", counts={}, listed=len(models))
-            job.set_phase("cancelled")
-            cancel.clear()
-            pause.clear()
-            logger.log(f"Cancelled during listing after {len(models)} models.")
-            return 4
-
+        job.set_phase("running")
+        job.emit("stream_start", concurrency=concurrency, dryRun=dry_run)
         logger.log(
-            f"Processing {len(models)} models (concurrency={concurrency}, dry_run={dry_run})"
+            f"Streaming {model_type} base={base_model!r} "
+            f"(concurrency={concurrency}, dry_run={dry_run}, limit={limit or 'all'})"
         )
-        job.set_phase("downloading")
-        job.set_count("total", len(models))
-        counts: dict[str, int] = {}
-        counts_lock = threading.Lock()
+
         cancel_logged = False
-        on_pause_dl, on_resume_dl = _pause_hooks("downloading")
+        on_pause_run, on_resume_run = _pause_hooks("running")
+        counts_lock = threading.Lock()
 
         def worker(model: dict[str, Any]) -> str:
             nonlocal cancel_logged
             if pause.wait_if_paused(
                 cancel,
-                resume_phase="downloading",
-                on_pause=on_pause_dl,
-                on_resume=on_resume_dl,
+                resume_phase="running",
+                on_pause=on_pause_run,
+                on_resume=on_resume_run,
             ):
                 with counts_lock:
                     if not cancel_logged:
                         job.emit(
                             "cancel_requested",
                             source=cancel.source,
-                            phase="downloading",
+                            phase="running",
                         )
                         cancel_logged = True
-                    counts["cancelled"] = counts.get("cancelled", 0) + 1
-                    job.set_count("cancelled", counts["cancelled"])
-                    job.set_count("processed", sum(counts.values()))
                 return "cancelled"
             if cancel.is_requested():
                 with counts_lock:
@@ -543,15 +466,12 @@ def run_batch(
                         job.emit(
                             "cancel_requested",
                             source=cancel.source,
-                            phase="downloading",
+                            phase="running",
                         )
                         cancel_logged = True
-                    counts["cancelled"] = counts.get("cancelled", 0) + 1
-                    job.set_count("cancelled", counts["cancelled"])
-                    job.set_count("processed", sum(counts.values()))
                 return "cancelled"
             job.set_current(model)
-            status = process_one(
+            return process_one(
                 client,
                 model,
                 out_dir,
@@ -566,52 +486,75 @@ def run_batch(
                 resume=resume,
                 skip_verify=skip_verify,
             )
-            with counts_lock:
-                counts[status] = counts.get(status, 0) + 1
-                job.set_count(status, counts[status])
-                job.set_count("processed", sum(counts.values()))
-            return status
 
-        if concurrency <= 1:
-            for model in models:
-                if cancel.is_requested() and not cancel_logged:
-                    job.emit(
-                        "cancel_requested",
-                        source=cancel.source,
-                        phase="downloading",
-                    )
-                    cancel_logged = True
-                    cancelled = True
-                    break
-                status = worker(model)
-                if status == "cancelled":
-                    cancelled = True
-                    break
-        else:
-            with ThreadPoolExecutor(max_workers=concurrency) as ex:
-                futs = {ex.submit(worker, m): m for m in models}
-                for fut in as_completed(futs):
-                    try:
-                        if fut.result() == "cancelled":
-                            cancelled = True
-                    except Exception as e:
-                        m = futs[fut]
-                        logger.record_failure(m, "worker_crash", extra={"detail": repr(e)})
+        def on_listed(n: int, model: dict[str, Any]) -> None:
+            job.set_count("listed", n)
+            if n % 50 == 0:
+                job.emit("listing_progress", listed=n)
+                logger.log(f"Listed {n} models…")
+
+        def on_worker_crash(model: dict[str, Any], err: BaseException) -> None:
+            logger.record_failure(model, "worker_crash", extra={"detail": repr(err)})
+            job.emit(
+                "fail",
+                reason="worker_crash",
+                retryable=True,
+                detail=repr(err),
+                modelId=model.get("id"),
+                modelName=model.get("name"),
+            )
+
+        def on_result(status: str, snapshot: dict[str, int]) -> None:
+            for key, value in snapshot.items():
+                job.set_count(key, value)
+            job.set_count("processed", sum(snapshot.values()))
+
+        def should_stop() -> bool:
+            nonlocal cancel_logged
+            if cancel.is_requested():
+                with counts_lock:
+                    if not cancel_logged:
                         job.emit(
-                            "fail",
-                            reason="worker_crash",
-                            retryable=True,
-                            detail=repr(e),
-                            modelId=m.get("id"),
-                            modelName=m.get("name"),
+                            "cancel_requested",
+                            source=cancel.source,
+                            phase="running",
                         )
-                        with counts_lock:
-                            counts["error"] = counts.get("error", 0) + 1
-                            job.set_count("error", counts["error"])
-                            job.set_count("processed", sum(counts.values()))
+                        cancel_logged = True
+                return True
+            return pause.wait_if_paused(
+                cancel,
+                resume_phase="running",
+                on_pause=on_pause_run,
+                on_resume=on_resume_run,
+            )
+
+        model_iter = _iter_models_for_run(
+            client,
+            logger,
+            retry_failed=retry_failed,
+            base_model=base_model,
+            model_type=model_type,
+            nsfw=nsfw,
+            sort=sort,
+        )
+
+        counts, cancelled, listed = run_streaming_pool(
+            model_iter,
+            worker=worker,
+            concurrency=concurrency,
+            limit=limit,
+            should_stop=should_stop,
+            on_listed=on_listed,
+            on_worker_crash=on_worker_crash,
+            on_result=on_result,
+        )
+
+        job.set_count("listed", listed)
+        if not cancelled:
+            job.emit("listing_done", listed=listed)
 
         if cancelled or counts.get("cancelled"):
-            job.emit("run_cancelled", counts=dict(counts))
+            job.emit("run_cancelled", counts=dict(counts), listed=listed)
             job.set_phase("cancelled")
             cancel.clear()
             pause.clear()
@@ -619,7 +562,7 @@ def run_batch(
             logger.log(f"Job status -> {logger.job_path}")
             return 4
 
-        job.emit("run_done", counts=dict(counts))
+        job.emit("run_done", counts=dict(counts), listed=listed)
         job.set_phase("done")
         cancel.clear()
         pause.clear()
@@ -639,6 +582,45 @@ def run_batch(
     finally:
         lock.release()
         job.emit("lock_released", lockPath=str(lock.path))
+
+
+def _iter_models_for_run(
+    client: CivitClient,
+    logger: RunLogger,
+    *,
+    retry_failed: bool,
+    base_model: str,
+    model_type: str,
+    nsfw: bool,
+    sort: str,
+) -> Iterator[dict[str, Any]]:
+    if retry_failed:
+        import time
+
+        ids = logger.load_failed_model_ids()
+        logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
+        for mid in ids:
+            try:
+                yield client.get_model(mid)
+            except Exception as e:
+                logger.record_failure(
+                    {"id": mid, "name": None},
+                    "retry_fetch_failed",
+                    extra={"detail": repr(e)},
+                )
+            time.sleep(0.2)
+        return
+
+    logger.log(
+        f"Listing {model_type} for base={base_model!r} sort={sort!r} "
+        f"from {client.base_url} …"
+    )
+    yield from client.iter_models(
+        base_model=base_model,
+        model_type=model_type,
+        nsfw=nsfw,
+        sort=sort,
+    )
 
 
 def run_heal(

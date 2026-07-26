@@ -180,8 +180,8 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 
 | File | Purpose |
 |------|---------|
-| `logs/job.json` | Live phase, counts, current model, timestamps |
-| `logs/events.jsonl` | Structured diary (`run_start`, `download_*`, `fail`, `paused`, …) |
+| `logs/job.json` | Live phase (`running` while streaming), counts, current model, timestamps |
+| `logs/events.jsonl` | Structured diary (`stream_start`, `listing_progress`, `download_*`, `fail`, `paused`, …) |
 | `logs/failed.jsonl` | Failures with `retryable` flag — feed `--retry-failed` |
 | `logs/manifest.jsonl` | Success rows + `sortHints` for upcoming categorizing |
 | `logs/run.log` | Console transcript |
@@ -189,6 +189,8 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `<out>/.civitmatrix.lock` | One writer per output folder |
 
 On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
+
+Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart.
 
 **`--status` exit codes:** `0` done · `1` missing job · `2` error · `4` cancelled · `5` paused · `6` active  
 **Runner exits:** `0` ok · `2` missing API key · `3` lock busy · `4` cancelled · `130` forced second Ctrl+C

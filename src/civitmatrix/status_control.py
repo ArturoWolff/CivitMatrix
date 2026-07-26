@@ -79,7 +79,7 @@ def status_exit_code(snapshot: dict[str, Any] | None) -> int:
         return EXIT_CANCELLED
     if phase == "paused":
         return EXIT_PAUSED
-    if phase in {"starting", "listing", "downloading", "healing"}:
+    if phase in {"starting", "listing", "downloading", "running", "healing"}:
         return EXIT_ACTIVE
     if snapshot.get("finishedAt"):
         return EXIT_ERROR
