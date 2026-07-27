@@ -44,8 +44,48 @@ from civitmatrix.verify_blake3 import (
     version_matches_local_hash,
 )
 from civitmatrix.version_prune import prune_old_versions
+from civitmatrix.model_filters import model_passes_filters
 
 _index_lock = threading.Lock()
+
+
+def _resolve_versions(
+    model: dict[str, Any],
+    version_ids: list[Any] | None,
+    *,
+    base_model: str,
+    match_base_version: bool,
+) -> list[dict[str, Any]]:
+    from civitmatrix.indexer import pick_matching_version
+
+    if not version_ids or version_ids == ["latest"]:
+        ver = pick_matching_version(
+            model, base_model, match_base_version=match_base_version
+        )
+        return [ver] if ver else []
+    out: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for vid in version_ids:
+        if vid in ("latest", None, "Latest"):
+            for v in _resolve_versions(
+                model, ["latest"], base_model=base_model, match_base_version=match_base_version
+            ):
+                i = int(v["id"])
+                if i not in seen:
+                    seen.add(i)
+                    out.append(v)
+            continue
+        for v in model.get("modelVersions") or []:
+            try:
+                if int(v.get("id")) == int(vid):
+                    i = int(vid)
+                    if i not in seen:
+                        seen.add(i)
+                        out.append(v)
+                    break
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def _model_fields(model: dict[str, Any], version: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -125,8 +165,9 @@ def process_one(
     skip_verify: bool = False,
     disk_floor_bytes: int = 0,
     keep_old_versions: bool = False,
+    force_version: dict[str, Any] | None = None,
 ) -> str:
-    version = pick_matching_version(
+    version = force_version or pick_matching_version(
         model, base_model, match_base_version=match_base_version
     )
     if not version:
@@ -558,6 +599,12 @@ def run_batch(
     refresh_listing: bool = False,
     disk_floor_gib: float = 2.0,
     keep_old_versions: bool = False,
+    tag_include: list[str] | None = None,
+    tag_exclude: list[str] | None = None,
+    category: str = "",
+    users: list[str] | None = None,
+    file_format: str = "",
+    selection_map: dict[int, list] | None = None,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -715,23 +762,51 @@ def run_batch(
                 )
                 return "cancelled"
             job.set_current(model)
-            return process_one(
-                client,
+            try:
+                mid = int(model["id"])
+            except (KeyError, TypeError, ValueError):
+                mid = -1
+            sel = selection_map or {}
+            version_specs = sel.get(mid, ["latest"]) if sel else ["latest"]
+            versions = _resolve_versions(
                 model,
-                out_dir,
-                local_blake3,
-                local_versions,
-                local_stems,
-                logger,
+                version_specs,
                 base_model=base_model,
                 match_base_version=match_base_version,
-                dry_run=dry_run,
-                job=job,
-                resume=resume,
-                skip_verify=skip_verify,
-                disk_floor_bytes=disk_floor_bytes,
-                keep_old_versions=keep_old_versions,
             )
+            if not versions:
+                logger.fail_with_event(
+                    job,
+                    model,
+                    "no_matching_base_version",
+                    retryable=False,
+                    **_model_fields(model),
+                )
+                return "no_match"
+            multi = len(versions) > 1
+            last = "ok"
+            for ver in versions:
+                last = process_one(
+                    client,
+                    model,
+                    out_dir,
+                    local_blake3,
+                    local_versions,
+                    local_stems,
+                    logger,
+                    base_model=base_model,
+                    match_base_version=match_base_version,
+                    dry_run=dry_run,
+                    job=job,
+                    resume=resume,
+                    skip_verify=skip_verify,
+                    disk_floor_bytes=disk_floor_bytes,
+                    keep_old_versions=keep_old_versions or multi,
+                    force_version=ver,
+                )
+                if last in {"cancelled", "disk_full"}:
+                    return last
+            return last
 
         def on_listed(n: int, model: dict[str, Any]) -> None:
             job.set_count("listed", n)
@@ -793,6 +868,12 @@ def run_batch(
             sort=sort,
             use_listing_cache=use_listing_cache,
             refresh_listing=refresh_listing,
+            tag_include=tag_include or [],
+            tag_exclude=tag_exclude or [],
+            category=category,
+            users=users or [],
+            file_format=file_format,
+            selection_map=selection_map,
         )
 
         counts: dict[str, int] = {}
@@ -888,8 +969,29 @@ def _iter_models_for_run(
     sort: str,
     use_listing_cache: bool = False,
     refresh_listing: bool = False,
+    tag_include: list[str] | None = None,
+    tag_exclude: list[str] | None = None,
+    category: str = "",
+    users: list[str] | None = None,
+    file_format: str = "",
+    selection_map: dict[int, list] | None = None,
 ) -> Iterator[dict[str, Any]]:
     logs_dir = logger.job_path.parent
+    tag_include = tag_include or []
+    tag_exclude = tag_exclude or []
+    users = users or []
+
+    def _passes(model: dict[str, Any]) -> bool:
+        return model_passes_filters(
+            model,
+            tag_include=tag_include,
+            tag_exclude=tag_exclude,
+            category=category if category and str(category).lower() != "any" else None,
+            users=users,
+            file_format=file_format
+            if file_format and str(file_format).lower() != "any"
+            else None,
+        )
 
     if retry_failed:
         import time
@@ -906,6 +1008,27 @@ def _iter_models_for_run(
                     extra={"detail": repr(e)},
                 )
             time.sleep(0.2)
+        listing_state["exhausted"] = True
+        return
+
+    if selection_map:
+        import time
+
+        logger.log(f"Selection mode: {len(selection_map)} modelId(s)")
+        for mid in selection_map:
+            try:
+                model = client.get_model(mid)
+            except Exception as e:
+                logger.record_failure(
+                    {"id": mid, "name": None},
+                    "selection_fetch_failed",
+                    extra={"detail": repr(e)},
+                )
+                time.sleep(0.2)
+                continue
+            if _passes(model):
+                yield model
+            time.sleep(0.15)
         listing_state["exhausted"] = True
         return
 
@@ -948,7 +1071,8 @@ def _iter_models_for_run(
             )
             logger.log(f"Listing cache hit ({meta.get('items')} items) → {jsonl}")
             for model in iter_cached_models(jsonl):
-                yield model
+                if _passes(model):
+                    yield model
             listing_state["exhausted"] = True
             return
         job.emit("listing_cache_miss", key=key, reason=reason)
@@ -970,13 +1094,17 @@ def _iter_models_for_run(
         if writer is not None:
             writer.append_page(page=page, next_page=next_page, items=items)
 
-    yield from client.iter_models(
+    username = users[0] if len(users) == 1 else None
+    for model in client.iter_models(
         base_model=base_model,
         model_type=model_type,
         nsfw=nsfw,
         sort=sort,
+        username=username,
         on_page=on_page,
-    )
+    ):
+        if _passes(model):
+            yield model
     listing_state["exhausted"] = True
 
 

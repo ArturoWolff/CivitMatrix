@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CivitMatrix</title>
+  <link rel="stylesheet" href="/win95.css" />
+</head>
+<body>
+  <div class="window" role="application">
+    <div class="titlebar">
+      <span>CivitMatrix</span>
+      <span class="controls">
+        <button type="button" title="Minimize" disabled>_</button>
+        <button type="button" title="Maximize" disabled>□</button>
+        <button type="button" title="Close" onclick="window.close()">X</button>
+      </span>
+    </div>
+    <div class="nav">
+      <label><input type="radio" name="view" value="main" checked /> Main</label>
+      <label><input type="radio" name="view" value="directories" /> Directories</label>
+      <label><input type="radio" name="view" value="logs" /> Logs</label>
+    </div>
+    <div class="content">
+      <!-- MAIN -->
+      <section id="view-main" class="view active">
+        <div class="row">
+          <label class="field">Type
+            <select id="fType">
+              <option>LORA</option>
+              <option>LoCon</option>
+              <option>DoRA</option>
+              <option>Checkpoint</option>
+              <option>TextualInversion</option>
+              <option>VAE</option>
+              <option>Workflows</option>
+            </select>
+          </label>
+          <label class="field">Base
+            <input id="fBase" type="text" value="Anima" class="wide" />
+          </label>
+          <label class="field">Sort
+            <select id="fSort">
+              <option>Newest</option>
+              <option>Most Downloaded</option>
+              <option>Highest Rated</option>
+              <option>Most Liked</option>
+              <option>Most Discussed</option>
+              <option>Most Collected</option>
+              <option>Most Buzz</option>
+            </select>
+          </label>
+          <label class="field"><input id="fNsfw" type="checkbox" checked /> NSFW</label>
+        </div>
+        <div class="row">
+          <label class="field">Format
+            <select id="fFormat">
+              <option value="any">any</option>
+              <option value="SafeTensor">SafeTensor</option>
+              <option value="PickleTensor">PickleTensor</option>
+            </select>
+          </label>
+          <label class="field">Category
+            <input id="fCategory" type="text" placeholder="any" class="wide" />
+          </label>
+          <label class="field">Users
+            <input id="fUsers" type="text" placeholder="comma usernames" class="wide" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="field">Tags include
+            <input id="fTagInc" class="tag" type="text" placeholder="empty = all" />
+          </label>
+          <label class="field">Tags exclude
+            <input id="fTagExc" class="tag" type="text" placeholder="empty = none" />
+          </label>
+        </div>
+        <div class="row">
+          <button type="button" class="primary" id="btnPopulate">Populate</button>
+          <span id="matchInfo" class="muted">matches: 0 · selected: all</span>
+          <label class="field">Max
+            <input id="fMax" type="number" value="200" min="1" max="2000" style="width:64px" />
+          </label>
+          <span class="hint">Unchecked rows are skipped. Version default = latest.</span>
+        </div>
+        <div class="list-wrap">
+          <table class="models">
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="chkAll" checked title="Toggle all" /></th>
+                <th>Model</th>
+                <th>Creator</th>
+                <th>Version</th>
+                <th>Size</th>
+              </tr>
+            </thead>
+            <tbody id="modelBody"></tbody>
+          </table>
+        </div>
+        <div class="row panel">
+          <strong id="runPhase">Status: IDLE</strong>
+          <span id="runCounts" class="muted"></span>
+          <div class="progress" title="progress"><span id="progBar"></span></div>
+          <button type="button" class="primary" id="btnStart">Start</button>
+          <button type="button" id="btnPause">Pause</button>
+          <button type="button" id="btnResume">Resume</button>
+          <button type="button" id="btnCancel">Cancel</button>
+        </div>
+      </section>
+
+      <!-- DIRECTORIES -->
+      <section id="view-directories" class="view">
+        <p class="hint">Output folders per model type (Stability Matrix layout).</p>
+        <div class="dir-grid" id="dirGrid"></div>
+        <div class="row" style="margin-top:12px">
+          <label class="field">API key
+            <input id="dApiKey" type="text" class="wide" placeholder="•••• (leave blank to keep)" autocomplete="off" />
+          </label>
+          <label class="field">Base URL
+            <input id="dBaseUrl" type="text" class="wide" />
+          </label>
+          <label class="field">Disk floor GiB
+            <input id="dFloor" type="number" step="0.5" min="0" style="width:64px" />
+          </label>
+          <button type="button" class="primary" id="btnSaveDirs">Save</button>
+        </div>
+        <p id="dirMsg" class="muted"></p>
+      </section>
+
+      <!-- LOGS -->
+      <section id="view-logs" class="view">
+        <div class="row panel">
+          <span id="logJob">Job: —</span>
+          <span id="logFails" class="muted">Failures (retryable): 0</span>
+          <button type="button" id="btnRetry">Retry failed</button>
+        </div>
+        <div id="logBox"></div>
+      </section>
+    </div>
+    <div class="statusbar">
+      <span id="statusMsg">Ready.</span>
+      <span>127.0.0.1</span>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

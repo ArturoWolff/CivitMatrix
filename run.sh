@@ -20,4 +20,14 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-exec python -m civitmatrix "$@"
+# Default: Win95 UI. Headless: ./run.sh --cli …
+if [[ "${1:-}" == "--cli" ]]; then
+  shift
+  exec python -m civitmatrix --cli "$@"
+fi
+
+if [[ $# -gt 0 ]]; then
+  exec python -m civitmatrix --cli "$@"
+fi
+
+exec python -m civitmatrix --ui

@@ -37,6 +37,8 @@ class CivitClient:
         nsfw: bool = True,
         sort: str = "Highest Rated",
         page_limit: int = 100,
+        username: str | None = None,
+        tag: str | None = None,
         on_page: Callable[..., None] | None = None,
     ) -> Iterator[dict[str, Any]]:
         url = f"{self.base_url}/api/v1/models"
@@ -47,6 +49,10 @@ class CivitClient:
             "limit": page_limit,
             "sort": sort,
         }
+        if username:
+            params["username"] = username
+        if tag:
+            params["tag"] = tag
         page_num = 0
         while True:
             data = self.get_json(url, params=params)

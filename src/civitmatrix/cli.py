@@ -191,15 +191,62 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --heal, delete .cm-info/preview that have no matching weight",
     )
+    p.add_argument(
+        "--ui",
+        action="store_true",
+        help="Open local Win95 batch UI (default when no other args)",
+    )
+    p.add_argument(
+        "--cli",
+        action="store_true",
+        help="Force CLI batch mode (no UI)",
+    )
+    p.add_argument(
+        "--job-manifest",
+        type=str,
+        default="",
+        help="JSON job from UI (filters + selection)",
+    )
+    p.add_argument("--tag-include", type=str, default="", help="Comma tags include")
+    p.add_argument("--tag-exclude", type=str, default="", help="Comma tags exclude")
+    p.add_argument("--category", type=str, default="", help="Category filter")
+    p.add_argument("--users", type=str, default="", help="Comma creator usernames")
+    p.add_argument(
+        "--format",
+        dest="file_format",
+        type=str,
+        default="",
+        help="File format filter (SafeTensor, …)",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    import sys
+
     # Prefer config next to where the user runs the tool (repo clone / working dir)
     root = Path.cwd()
     load_dotenv(root / ".env")
     load_dotenv()  # also allow exported env vars / parent .env
-    args = build_parser().parse_args(argv)
+
+    raw = list(argv) if argv is not None else list(sys.argv[1:])
+    want_ui = False
+    if not raw or raw == ["--ui"] or (raw and raw[0] == "--ui"):
+        want_ui = True
+    if raw and raw[0] == "--cli":
+        raw = raw[1:]
+        want_ui = False
+    elif raw and any(
+        a.startswith("-") and a not in {"--ui", "--no-open"} for a in raw
+    ):
+        want_ui = False
+    if want_ui:
+        from civitmatrix.ui.server import run_ui
+
+        open_browser = "--no-open" not in raw
+        return run_ui(open_browser=open_browser)
+
+    args = build_parser().parse_args(raw)
 
     logs_dir = root / "logs"
     if args.status:
@@ -222,10 +269,38 @@ def main(argv: list[str] | None = None) -> int:
     model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
     sort = args.sort or os.environ.get("SORT", "Highest Rated")
     out_dir = Path(args.out or os.environ.get("LORA_DIR", "./downloads/Lora")).expanduser()
+
+    from civitmatrix.model_filters import parse_csv_list
+
+    job_manifest: dict = {}
+    selection_map: dict[int, list] = {}
+    if args.job_manifest:
+        import json as _json
+
+        job_manifest = _json.loads(Path(args.job_manifest).read_text(encoding="utf-8"))
+        base_model = str(job_manifest.get("baseModel") or base_model)
+        model_type = str(job_manifest.get("type") or model_type)
+        sort = str(job_manifest.get("sort") or sort)
+        if job_manifest.get("outDir"):
+            out_dir = Path(str(job_manifest["outDir"]))
+        for row in job_manifest.get("selection") or []:
+            try:
+                selection_map[int(row["modelId"])] = list(row.get("versionIds") or ["latest"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    tag_include = parse_csv_list(args.tag_include) or list(job_manifest.get("tagInclude") or [])
+    tag_exclude = parse_csv_list(args.tag_exclude) or list(job_manifest.get("tagExclude") or [])
+    category = args.category or job_manifest.get("category") or ""
+    users = parse_csv_list(args.users) or list(job_manifest.get("users") or [])
+    file_format = args.file_format or job_manifest.get("format") or ""
+
     if not out_dir.is_absolute():
         out_dir = (root / out_dir).resolve()
     concurrency = args.concurrency or int(os.environ.get("MAX_CONCURRENT", "2"))
     nsfw = args.nsfw if args.nsfw is not None else _env_bool("NSFW", True)
+    if "nsfw" in job_manifest:
+        nsfw = bool(job_manifest["nsfw"])
     match_base = (
         args.match_base_version
         if args.match_base_version is not None
@@ -284,6 +359,12 @@ def main(argv: list[str] | None = None) -> int:
         refresh_listing=bool(args.refresh_listing),
         disk_floor_gib=disk_floor_gib,
         keep_old_versions=bool(args.keep_old_versions),
+        tag_include=tag_include,
+        tag_exclude=tag_exclude,
+        category=category,
+        users=users,
+        file_format=file_format,
+        selection_map=selection_map,
     )
 
 

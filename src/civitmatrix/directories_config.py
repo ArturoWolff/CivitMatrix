@@ -1,0 +1,89 @@
+"""Persist per-type output directories + UI globals."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+DEFAULT_TYPE_DIRS = {
+    "LORA": "Lora",
+    "LoCon": "Lora",
+    "DoRA": "Lora",
+    "Checkpoint": "StableDiffusion",
+    "TextualInversion": "Embeddings",
+    "VAE": "VAE",
+    "Workflows": "Workflows",
+    "Controlnet": "ControlNet",
+    "Upscaler": "ESRGAN",
+    "Other": "Other",
+}
+
+
+def default_directories(models_root: Path | None = None) -> dict[str, Any]:
+    root = models_root or Path(
+        os.environ.get("MODELS_ROOT", "/run/media/arturo/Datos2/Models")
+    )
+    paths = {k: str(root / v) for k, v in DEFAULT_TYPE_DIRS.items()}
+    # Alias common UI labels
+    paths["Embedding"] = paths["TextualInversion"]
+    return {
+        "modelsRoot": str(root),
+        "paths": paths,
+        "baseUrl": os.environ.get("CIVITAI_BASE_URL", "https://civitai.red"),
+        "diskFloorGib": float(os.environ.get("DISK_FLOOR_GIB", "2") or 2),
+        "apiKeySet": bool(os.environ.get("CIVITAI_API_KEY", "").strip()),
+    }
+
+
+def load_directories(path: Path, *, models_root: Path | None = None) -> dict[str, Any]:
+    base = default_directories(models_root)
+    if not path.exists():
+        return base
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return base
+    if not isinstance(data, dict):
+        return base
+    paths = dict(base["paths"])
+    incoming = data.get("paths") or {}
+    if isinstance(incoming, dict):
+        for k, v in incoming.items():
+            if v:
+                paths[str(k)] = str(v)
+    out = {
+        **base,
+        **{k: v for k, v in data.items() if k != "paths"},
+        "paths": paths,
+        "apiKeySet": bool(os.environ.get("CIVITAI_API_KEY", "").strip()),
+    }
+    return out
+
+
+def save_directories(path: Path, data: dict[str, Any]) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean = {
+        "modelsRoot": data.get("modelsRoot"),
+        "paths": data.get("paths") or {},
+        "baseUrl": data.get("baseUrl"),
+        "diskFloorGib": data.get("diskFloorGib", 2),
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return load_directories(path)
+
+
+def path_for_type(config: dict[str, Any], model_type: str) -> Path:
+    paths = config.get("paths") or {}
+    key = model_type
+    if key not in paths and key == "TextualInversion":
+        key = "Embedding"
+    if key not in paths and model_type in {"LoCon", "DoRA"}:
+        key = "LORA"
+    raw = paths.get(key) or paths.get(model_type) or paths.get("LORA")
+    if not raw:
+        return Path(default_directories()["paths"]["LORA"])
+    return Path(str(raw))

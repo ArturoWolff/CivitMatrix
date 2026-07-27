@@ -44,12 +44,13 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 ## v0.4 — GUI
 
-- [ ] Lightweight local **browser** UI (Win95-flavored; no Electron)  
-- [ ] Poll `job.json` / `events.jsonl` only (control plane already shipped)  
-- [ ] Queue view + progress; wire Start / Cancel / Pause / Resume  
-- [ ] Visual filter builder  
-- [ ] Folder picker for SM Models paths  
-- [ ] Failure browser with one-click retry
+- [x] Lightweight local **browser** UI (Win95-flavored; no Electron)  
+- [x] Poll `job.json` / `events.jsonl` only (control plane already shipped)  
+- [x] Main / Directories / Logs; Start / Cancel / Pause / Resume  
+- [x] Populate + select models; version latest / multi  
+- [x] Filter dims: tags include/exclude, category, users, format  
+- [x] Per-type output directories  
+- [ ] Failure browser polish / saved presets
 
 ## v0.5 — Deeper SM integration
 

@@ -207,7 +207,7 @@ Catalog processing is **streamed**: models are submitted to the worker pool as l
 
 - **Filters** — tags, min downloads, base-only, creators  
 - **Categorizing** — auto-bucket into characters / styles / concepts / clothes  
-- **GUI** — local Win95-flavored browser UI polling the control plane  
+- **GUI** — `./run.sh` opens a local Win95-flavored UI (Main / Directories / Logs) on `127.0.0.1`; use `./run.sh --cli` for scripts  
 - **Deeper SM hooks** — index refresh helpers, update-only mode  
 
 See the full plan: [ROADMAP.md](ROADMAP.md)

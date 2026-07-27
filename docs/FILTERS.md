@@ -27,14 +27,15 @@
 `baseModels=Anima` (API) means “has **at least one** Anima version,” not “Anima-only.”  
 With `--match-base-version` (default), CivitMatrix still downloads the newest **Anima** (or chosen base) version of that model.
 
-## Coming next
+## Coming next / available in UI
 
-Tracked in [ROADMAP.md](../ROADMAP.md):
+| Filter | Notes |
+|--------|--------|
+| Tag include / exclude | Empty include = any; empty exclude = none; both AND |
+| Category | Separate dim (not tags) |
+| Users / creators | Comma usernames |
+| Format | SafeTensor / PickleTensor / any |
+| Populate + selection | UI checklist; `--job-manifest` for CLI |
+| Per-model versions | latest (default) or multi-select |
 
-- Tag include / exclude  
-- Minimum download or thumbs-up counts  
-- Creator allow / deny lists  
-- True base-only (reject multi-base models)  
-- Published date range  
-- NSFW level thresholds  
-- Saved filter presets (import / export)
+Also tracked in [ROADMAP.md](../ROADMAP.md): min downloads/thumbs, date range, NSFW level, saved presets.

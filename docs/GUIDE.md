@@ -219,7 +219,26 @@ CivitMatrix keeps **one version per model**: the newest matching base-model vers
 
 - After `skip_hash` / `skip_version` / successful download+verify, older local stems with the same `ModelId` (weight + `.cm-info.json` + preview) are deleted.
 - Event: `prune_old_version`; job count: `pruned`.
-- Opt out: `./run.sh --keep-old-versions`
+- Opt out: `./run.sh --cli --keep-old-versions`
+
+## Local Win95 UI (default)
+
+`./run.sh` opens a localhost UI (`127.0.0.1:7860`) with three views:
+
+| View | Purpose |
+|------|---------|
+| **Main** | Type / base / sort / NSFW / Format / Category / Users / Tags → **Populate** → checklist (all selected by default) → **Start** |
+| **Directories** | Per-type output folders + API key / base URL / disk floor |
+| **Logs** | Job counts, event tail, retry failed |
+
+Headless / scripts:
+
+```bash
+./run.sh --cli --limit 10
+./run.sh --cli --retry-failed
+```
+
+Tag filters: empty include = all tags; empty exclude = exclude none; both set = must match include and avoid exclude. Format / Category / Users are separate dimensions (AND with tags).
 
 ## Library heal (`--heal`)
 
