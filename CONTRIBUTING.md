@@ -5,7 +5,7 @@ Thanks for helping CivitMatrix grow.
 ## Dev setup
 
 ```bash
-git clone https://github.com/ArturoWolff/civitmatrix.git
+git clone https://github.com/ArturoWolff/CivitMatrix.git
 cd civitmatrix
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1

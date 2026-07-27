@@ -14,7 +14,7 @@ Cross-platform setup, personalization, and Stability Matrix paths.
 ### Option A — wrappers (recommended)
 
 ```bash
-git clone https://github.com/ArturoWolff/civitmatrix.git
+git clone https://github.com/ArturoWolff/CivitMatrix.git
 cd civitmatrix
 cp .env.example .env
 # edit .env

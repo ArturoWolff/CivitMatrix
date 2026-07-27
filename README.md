@@ -60,7 +60,7 @@ flowchart LR
 ### 1. Clone
 
 ```bash
-git clone https://github.com/ArturoWolff/civitmatrix.git
+git clone https://github.com/ArturoWolff/CivitMatrix.git
 cd civitmatrix
 cp .env.example .env
 ```

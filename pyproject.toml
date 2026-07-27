@@ -36,9 +36,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ArturoWolff/civitmatrix"
-Repository = "https://github.com/ArturoWolff/civitmatrix"
-Issues = "https://github.com/ArturoWolff/civitmatrix/issues"
+Homepage = "https://github.com/ArturoWolff/CivitMatrix"
+Repository = "https://github.com/ArturoWolff/CivitMatrix"
+Issues = "https://github.com/ArturoWolff/CivitMatrix/issues"
 Funding = "https://ko-fi.com/arturowolff"
 Linktree = "https://linktr.ee/ArturoWolff"
 
