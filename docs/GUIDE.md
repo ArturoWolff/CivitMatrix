@@ -227,9 +227,9 @@ CivitMatrix keeps **one version per model**: the newest matching base-model vers
 
 | View | Purpose |
 |------|---------|
-| **Main** | Type / base / sort / NSFW / Format / Category / Users / Tags → **Populate** → checklist (all selected by default) → **Start** |
-| **Directories** | Per-type output folders + API key / base URL / disk floor |
-| **Logs** | Job counts, event tail, retry failed |
+| **Main** | Filters → **Populate** preview → per-row **latest / pick…** versions → **Start**. “Download all matching filters” = full catalog (ignores preview cap). Uncheck it to download only checked rows + version picks. |
+| **Directories** | Models root + per-type folders (**Browse…**), API key / base URL / disk floor |
+| **Logs** | Job counts, event tail, **Retry failed + resume** |
 
 Headless / scripts:
 

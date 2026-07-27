@@ -268,8 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     base_model = args.base_model or os.environ.get("BASE_MODEL", "Anima")
     model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
     sort = args.sort or os.environ.get("SORT", "Highest Rated")
-    out_dir = Path(args.out or os.environ.get("LORA_DIR", "./downloads/Lora")).expanduser()
 
+    from civitmatrix.directories_config import load_directories, path_for_type
     from civitmatrix.model_filters import parse_csv_list
 
     job_manifest: dict = {}
@@ -281,13 +281,22 @@ def main(argv: list[str] | None = None) -> int:
         base_model = str(job_manifest.get("baseModel") or base_model)
         model_type = str(job_manifest.get("type") or model_type)
         sort = str(job_manifest.get("sort") or sort)
-        if job_manifest.get("outDir"):
-            out_dir = Path(str(job_manifest["outDir"]))
         for row in job_manifest.get("selection") or []:
             try:
                 selection_map[int(row["modelId"])] = list(row.get("versionIds") or ["latest"])
             except (KeyError, TypeError, ValueError):
                 continue
+
+    # Resolve out dir: --out > LORA_DIR > manifest outDir > directories.json > ./downloads/Lora
+    if args.out:
+        out_dir = Path(args.out).expanduser()
+    elif os.environ.get("LORA_DIR"):
+        out_dir = Path(os.environ["LORA_DIR"]).expanduser()
+    elif job_manifest.get("outDir"):
+        out_dir = Path(str(job_manifest["outDir"])).expanduser()
+    else:
+        dirs_cfg = load_directories(logs_dir / "directories.json")
+        out_dir = path_for_type(dirs_cfg, model_type)
 
     tag_include = parse_csv_list(args.tag_include) or list(job_manifest.get("tagInclude") or [])
     tag_exclude = parse_csv_list(args.tag_exclude) or list(job_manifest.get("tagExclude") or [])

@@ -220,5 +220,23 @@ table.models td.name {
   max-width: 900px;
 }
 
+.ver-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+}
+
+.ver-mode {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.ver-cell select.ver {
+  min-width: 150px;
+  max-width: 220px;
+}
+
 .muted { color: #404040; }
 .hint { font-size: 11px; color: #404040; }

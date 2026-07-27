@@ -21,10 +21,24 @@ DEFAULT_TYPE_DIRS = {
 }
 
 
+def default_models_root(models_root: Path | None = None) -> Path:
+    """Portable default: MODELS_ROOT, else cwd/downloads (or cwd if already Models)."""
+    if models_root is not None:
+        return Path(models_root).expanduser().resolve()
+    env = os.environ.get("MODELS_ROOT", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    if cwd.name.lower() == "models":
+        return cwd
+    parent = cwd.parent
+    if parent.name.lower() == "models":
+        return parent
+    return (cwd / "downloads").resolve()
+
+
 def default_directories(models_root: Path | None = None) -> dict[str, Any]:
-    root = models_root or Path(
-        os.environ.get("MODELS_ROOT", "/run/media/arturo/Datos2/Models")
-    )
+    root = default_models_root(models_root)
     paths = {k: str(root / v) for k, v in DEFAULT_TYPE_DIRS.items()}
     # Alias common UI labels
     paths["Embedding"] = paths["TextualInversion"]
@@ -59,13 +73,16 @@ def load_directories(path: Path, *, models_root: Path | None = None) -> dict[str
         "paths": paths,
         "apiKeySet": bool(os.environ.get("CIVITAI_API_KEY", "").strip()),
     }
+    if not out.get("modelsRoot"):
+        out["modelsRoot"] = base["modelsRoot"]
     return out
 
 
 def save_directories(path: Path, data: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_directories(path) if path.exists() else default_directories()
     clean = {
-        "modelsRoot": data.get("modelsRoot"),
+        "modelsRoot": data.get("modelsRoot") or existing.get("modelsRoot"),
         "paths": data.get("paths") or {},
         "baseUrl": data.get("baseUrl"),
         "diskFloorGib": data.get("diskFloorGib", 2),

@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 
+from civitmatrix.browse_dir import browse_directory
 from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
 from civitmatrix.directories_config import (
@@ -279,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 saved = load_directories(p["dirs"])
             _json_response(self, 200, saved)
+            return
+        if path == "/api/browse-dir":
+            start = body.get("start")
+            start_s = str(start).strip() if isinstance(start, str) and start.strip() else None
+            _json_response(self, 200, browse_directory(start_s))
             return
         _json_response(self, 404, {"error": "not found"})
 

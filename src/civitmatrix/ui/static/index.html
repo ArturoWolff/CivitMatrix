@@ -81,10 +81,10 @@
           <label class="field">Preview max
             <input id="fMax" type="number" value="500" min="0" max="50000" style="width:72px" title="0 = no preview cap (slow for huge catalogs). Does NOT limit downloads when Download all is checked." />
           </label>
-          <label class="field" title="When checked, Start downloads every model matching filters (full catalog), not just the preview rows">
+          <label class="field" title="When checked, Start downloads every model matching filters (full catalog), not just the preview rows. Version picks apply only when this is unchecked.">
             <input id="fDownloadAll" type="checkbox" checked /> Download all matching filters
           </label>
-          <span class="hint">Populate is a preview/picker. Uncheck “Download all” to download only checked rows.</span>
+          <span class="hint">Populate = preview/picker. Uncheck “Download all” to use checked rows + version picks (latest or multi).</span>
         </div>
         <div class="list-wrap">
           <table class="models">
@@ -114,7 +114,14 @@
 
       <!-- DIRECTORIES -->
       <section id="view-directories" class="view">
-        <p class="hint">Output folders per model type (Stability Matrix layout).</p>
+        <p class="hint">Output folders per model type (Stability Matrix layout). Browse opens a native folder dialog.</p>
+        <div class="row" style="margin-bottom:8px">
+          <label class="field">Models root
+            <input id="dModelsRoot" type="text" class="wide" placeholder="MODELS_ROOT / ./downloads" />
+          </label>
+          <button type="button" id="btnBrowseRoot" title="Pick models root">Browse…</button>
+          <button type="button" id="btnApplyRoot" title="Fill type paths from this root using SM folder names">Apply root → paths</button>
+        </div>
         <div class="dir-grid" id="dirGrid"></div>
         <div class="row" style="margin-top:12px">
           <label class="field">API key

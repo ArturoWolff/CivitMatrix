@@ -18,6 +18,20 @@ const DIR_KEYS = [
   "Other",
 ];
 
+const SM_SUBDIRS = {
+  LORA: "Lora",
+  LoCon: "Lora",
+  DoRA: "Lora",
+  Checkpoint: "StableDiffusion",
+  TextualInversion: "Embeddings",
+  Embedding: "Embeddings",
+  VAE: "VAE",
+  Workflows: "Workflows",
+  Controlnet: "ControlNet",
+  Upscaler: "ESRGAN",
+  Other: "Other",
+};
+
 function setStatus(msg) {
   $("#statusMsg").textContent = msg;
 }
@@ -56,16 +70,6 @@ function fmtSize(kb) {
   return `${Number(kb).toFixed(0)} KiB`;
 }
 
-function versionSelectHtml(m) {
-  const vers = m.versions || [];
-  let opts = `<option value="latest" selected>latest</option>`;
-  for (const v of vers) {
-    opts += `<option value="${v.id}">${escapeHtml(v.name || String(v.id))} (${v.id})</option>`;
-  }
-  // multi: use select multiple small
-  return `<select class="ver" data-id="${m.id}" multiple size="1" title="Ctrl+click for multiple versions; 'latest' alone = newest only">${opts}</select>`;
-}
-
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -74,21 +78,84 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+function versionCellHtml(m) {
+  const vers = m.versions || [];
+  let opts = "";
+  for (const v of vers) {
+    opts += `<option value="${v.id}" data-size="${v.sizeKB != null ? v.sizeKB : ""}">${escapeHtml(
+      v.name || String(v.id)
+    )} (${v.id})</option>`;
+  }
+  const id = m.id;
+  return `<div class="ver-cell" data-id="${id}">
+    <div class="ver-mode">
+      <label><input type="radio" name="vm-${id}" value="latest" checked /> latest</label>
+      <label><input type="radio" name="vm-${id}" value="pick" ${vers.length ? "" : "disabled"} /> pick…</label>
+    </div>
+    <select class="ver" data-id="${id}" multiple size="${Math.min(4, Math.max(2, vers.length || 2))}" disabled title="Ctrl/Cmd-click for multiple versions">${opts || "<option disabled>(no versions)</option>"}</select>
+  </div>`;
+}
+
+function rowSizeLabel(m, versionIds) {
+  const vers = m.versions || [];
+  if (!vers.length) return "—";
+  if (!versionIds || versionIds.length === 0 || (versionIds.length === 1 && versionIds[0] === "latest")) {
+    return fmtSize(vers[0].sizeKB);
+  }
+  let total = 0;
+  let n = 0;
+  for (const id of versionIds) {
+    const v = vers.find((x) => String(x.id) === String(id));
+    if (v && v.sizeKB != null) {
+      total += Number(v.sizeKB);
+      n += 1;
+    }
+  }
+  if (!n) return "—";
+  if (n === 1) return fmtSize(total);
+  return `${fmtSize(total)} (${n})`;
+}
+
+function versionIdsForRow(id) {
+  const cell = document.querySelector(`.ver-cell[data-id="${id}"]`);
+  if (!cell) return ["latest"];
+  const mode = cell.querySelector('input[type="radio"]:checked');
+  if (!mode || mode.value === "latest") return ["latest"];
+  const sel = cell.querySelector("select.ver");
+  const vals = sel ? [...sel.selectedOptions].map((o) => o.value) : [];
+  const ids = vals.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+  return ids.length ? ids : ["latest"];
+}
+
+function syncVerMode(cell) {
+  const mode = cell.querySelector('input[type="radio"]:checked');
+  const sel = cell.querySelector("select.ver");
+  if (!sel) return;
+  const pick = mode && mode.value === "pick";
+  sel.disabled = !pick;
+  if (pick && sel.selectedOptions.length === 0 && sel.options.length) {
+    sel.options[0].selected = true;
+  }
+}
+
+function updateRowSize(id) {
+  const m = models.find((x) => String(x.id) === String(id));
+  const td = document.querySelector(`td.size-cell[data-id="${id}"]`);
+  if (!m || !td) return;
+  td.textContent = rowSizeLabel(m, versionIdsForRow(id));
+}
+
 function renderModels() {
   const body = $("#modelBody");
   body.innerHTML = "";
   for (const m of models) {
     const tr = document.createElement("tr");
-    const size =
-      (m.versions && m.versions[0] && m.versions[0].sizeKB) != null
-        ? fmtSize(m.versions[0].sizeKB)
-        : "—";
     tr.innerHTML = `
       <td><input type="checkbox" class="rowchk" data-id="${m.id}" checked /></td>
       <td class="name" title="${escapeHtml(m.name || "")}">${escapeHtml(m.name || "")}</td>
       <td>${escapeHtml(m.creator || "")}</td>
-      <td>${versionSelectHtml(m)}</td>
-      <td>${size}</td>`;
+      <td>${versionCellHtml(m)}</td>
+      <td class="size-cell" data-id="${m.id}">${rowSizeLabel(m, ["latest"])}</td>`;
     body.appendChild(tr);
   }
   updateSelectedLabel();
@@ -108,16 +175,7 @@ function collectSelection() {
   for (const chk of $$(".rowchk")) {
     if (!chk.checked) continue;
     const id = Number(chk.dataset.id);
-    const sel = document.querySelector(`select.ver[data-id="${id}"]`);
-    let versionIds = ["latest"];
-    if (sel) {
-      const vals = [...sel.selectedOptions].map((o) => o.value);
-      if (vals.length && !(vals.length === 1 && vals[0] === "latest")) {
-        versionIds = vals.filter((v) => v !== "latest").map((v) => Number(v));
-        if (!versionIds.length) versionIds = ["latest"];
-      }
-    }
-    out.push({ modelId: id, versionIds });
+    out.push({ modelId: id, versionIds: versionIdsForRow(id) });
   }
   return out;
 }
@@ -181,6 +239,16 @@ async function retryFailedResume() {
   }
 }
 
+async function browseDir(start) {
+  const data = await api("/api/browse-dir", {
+    method: "POST",
+    body: JSON.stringify({ start: start || "" }),
+  });
+  if (data.error) throw new Error(data.error);
+  if (data.cancelled) return null;
+  return data.path || null;
+}
+
 async function loadDirectories() {
   const data = await api("/api/directories");
   const grid = $("#dirGrid");
@@ -193,13 +261,27 @@ async function loadDirectories() {
       "beforeend",
       `<span>${escapeHtml(key)}</span>
        <input type="text" data-dir="${key}" value="${escapeHtml(val)}" />
-       <span class="muted"></span>`
+       <button type="button" class="btn-browse" data-dir="${key}">Browse…</button>`
     );
   }
+  $("#dModelsRoot").value = data.modelsRoot || "";
   $("#dBaseUrl").value = data.baseUrl || "";
   $("#dFloor").value = data.diskFloorGib ?? 2;
   $("#dApiKey").placeholder = data.apiKeySet ? "•••••••• (set)" : "(not set)";
   $("#dApiKey").value = "";
+}
+
+function applyRootToPaths() {
+  const root = $("#dModelsRoot").value.trim().replace(/[/\\]+$/, "");
+  if (!root) {
+    $("#dirMsg").textContent = "Set Models root first.";
+    return;
+  }
+  for (const input of $$("#dirGrid input[data-dir]")) {
+    const sub = SM_SUBDIRS[input.dataset.dir] || "Other";
+    input.value = `${root}/${sub}`;
+  }
+  $("#dirMsg").textContent = "Paths filled from models root (Save to persist).";
 }
 
 async function saveDirectories() {
@@ -208,6 +290,7 @@ async function saveDirectories() {
     paths[input.dataset.dir] = input.value.trim();
   }
   const body = {
+    modelsRoot: $("#dModelsRoot").value.trim(),
     paths,
     baseUrl: $("#dBaseUrl").value.trim(),
     diskFloorGib: Number($("#dFloor").value) || 0,
@@ -218,6 +301,7 @@ async function saveDirectories() {
   $("#dirMsg").textContent = "Saved.";
   $("#dApiKey").value = "";
   $("#dApiKey").placeholder = data.apiKeySet ? "•••••••• (set)" : "(not set)";
+  if (data.modelsRoot) $("#dModelsRoot").value = data.modelsRoot;
 }
 
 async function pollStatus() {
@@ -285,14 +369,57 @@ function wire() {
       $("#dirMsg").textContent = e.message;
     })
   );
+  $("#btnBrowseRoot").addEventListener("click", async () => {
+    try {
+      const path = await browseDir($("#dModelsRoot").value.trim());
+      if (path) {
+        $("#dModelsRoot").value = path;
+        $("#dirMsg").textContent = "Models root updated (Apply root → paths, then Save).";
+      }
+    } catch (e) {
+      $("#dirMsg").textContent = e.message;
+    }
+  });
+  $("#btnApplyRoot").addEventListener("click", applyRootToPaths);
+  $("#dirGrid").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".btn-browse");
+    if (!btn) return;
+    const key = btn.dataset.dir;
+    const input = $(`#dirGrid input[data-dir="${key}"]`);
+    try {
+      const path = await browseDir(input ? input.value : "");
+      if (path && input) {
+        input.value = path;
+        $("#dirMsg").textContent = `${key} path updated (Save to persist).`;
+      }
+    } catch (err) {
+      $("#dirMsg").textContent = err.message;
+    }
+  });
   $("#chkAll").addEventListener("change", (e) => {
     $$(".rowchk").forEach((c) => {
       c.checked = e.target.checked;
     });
+    if (!e.target.checked) $("#fDownloadAll").checked = false;
     updateSelectedLabel();
   });
   $("#modelBody").addEventListener("change", (e) => {
-    if (e.target.classList.contains("rowchk")) updateSelectedLabel();
+    const t = e.target;
+    if (t.classList.contains("rowchk")) {
+      if (!t.checked) $("#fDownloadAll").checked = false;
+      updateSelectedLabel();
+      return;
+    }
+    const cell = t.closest(".ver-cell");
+    if (!cell) return;
+    if (t.type === "radio") {
+      syncVerMode(cell);
+      $("#fDownloadAll").checked = false;
+    }
+    if (t.classList.contains("ver")) {
+      $("#fDownloadAll").checked = false;
+    }
+    updateRowSize(cell.dataset.id);
   });
   setInterval(pollStatus, 1500);
   setInterval(pollEvents, 2000);
