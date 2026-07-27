@@ -78,10 +78,13 @@
         <div class="row">
           <button type="button" class="primary" id="btnPopulate">Populate</button>
           <span id="matchInfo" class="muted">matches: 0 · selected: all</span>
-          <label class="field">Max
-            <input id="fMax" type="number" value="200" min="1" max="2000" style="width:64px" />
+          <label class="field">Preview max
+            <input id="fMax" type="number" value="500" min="0" max="50000" style="width:72px" title="0 = no preview cap (slow for huge catalogs). Does NOT limit downloads when Download all is checked." />
           </label>
-          <span class="hint">Unchecked rows are skipped. Version default = latest.</span>
+          <label class="field" title="When checked, Start downloads every model matching filters (full catalog), not just the preview rows">
+            <input id="fDownloadAll" type="checkbox" checked /> Download all matching filters
+          </label>
+          <span class="hint">Populate is a preview/picker. Uncheck “Download all” to download only checked rows.</span>
         </div>
         <div class="list-wrap">
           <table class="models">
@@ -105,6 +108,7 @@
           <button type="button" id="btnPause">Pause</button>
           <button type="button" id="btnResume">Resume</button>
           <button type="button" id="btnCancel">Cancel</button>
+          <button type="button" id="btnRetryResume" title="Retry retryable failures (Range resume for partials)">Retry failed + resume</button>
         </div>
       </section>
 
@@ -132,7 +136,7 @@
         <div class="row panel">
           <span id="logJob">Job: —</span>
           <span id="logFails" class="muted">Failures (retryable): 0</span>
-          <button type="button" id="btnRetry">Retry failed</button>
+          <button type="button" id="btnRetry">Retry failed + resume</button>
         </div>
         <div id="logBox"></div>
       </section>

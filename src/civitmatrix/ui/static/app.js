@@ -33,6 +33,7 @@ async function api(path, opts = {}) {
 }
 
 function filterPayload() {
+  const maxRaw = Number($("#fMax").value);
   return {
     type: $("#fType").value,
     baseModel: $("#fBase").value.trim() || "Anima",
@@ -43,7 +44,8 @@ function filterPayload() {
     users: $("#fUsers").value.trim(),
     tagInclude: $("#fTagInc").value.trim(),
     tagExclude: $("#fTagExc").value.trim(),
-    maxResults: Number($("#fMax").value) || 200,
+    maxResults: Number.isFinite(maxRaw) ? maxRaw : 500,
+    downloadAll: $("#fDownloadAll").checked,
   };
 }
 
@@ -97,8 +99,8 @@ function updateSelectedLabel() {
   const on = checks.filter((c) => c.checked).length;
   const all = checks.length;
   const label = all && on === all ? "all" : String(on);
-  const trunc = models._truncated ? " (truncated)" : "";
-  $("#matchInfo").textContent = `matches: ${all}${trunc} · selected: ${label}`;
+  const trunc = models._truncated ? " (preview truncated — Start still downloads ALL if checked)" : "";
+  $("#matchInfo").textContent = `preview: ${all}${trunc} · selected: ${label}`;
 }
 
 function collectSelection() {
@@ -141,19 +143,41 @@ async function populate() {
 }
 
 async function startRun() {
-  const selection = collectSelection();
-  if (!selection.length) {
-    setStatus("Nothing selected.");
+  const downloadAll = $("#fDownloadAll").checked;
+  const selection = downloadAll ? [] : collectSelection();
+  if (!downloadAll && !selection.length) {
+    setStatus("Nothing selected. Check rows or enable Download all matching filters.");
     return;
   }
-  const body = { ...filterPayload(), selection, concurrency: 2 };
-  setStatus("Starting run…");
+  const body = {
+    ...filterPayload(),
+    selection,
+    downloadAll,
+    concurrency: 2,
+  };
+  setStatus(
+    downloadAll
+      ? "Starting full-catalog run (all matching filters)…"
+      : `Starting run for ${selection.length} selected model(s)…`
+  );
   try {
     const data = await api("/api/run", { method: "POST", body: JSON.stringify(body) });
     if (data.error) throw new Error(data.error);
     setStatus(`Run started (pid ${data.pid}).`);
   } catch (e) {
     setStatus(`Start failed: ${e.message}`);
+  }
+}
+
+async function retryFailedResume() {
+  setStatus("Clearing pause + retrying failed (resume partials)…");
+  try {
+    await api("/api/resume", { method: "POST" });
+    const data = await api("/api/retry-failed", { method: "POST" });
+    if (data.error) throw new Error(data.error);
+    setStatus(`Retry+resume started (pid ${data.pid}).`);
+  } catch (e) {
+    setStatus(`Retry failed: ${e.message}`);
   }
 }
 
@@ -254,11 +278,8 @@ function wire() {
   $("#btnPause").addEventListener("click", () => api("/api/pause", { method: "POST" }));
   $("#btnResume").addEventListener("click", () => api("/api/resume", { method: "POST" }));
   $("#btnCancel").addEventListener("click", () => api("/api/cancel", { method: "POST" }));
-  $("#btnRetry").addEventListener("click", () =>
-    api("/api/retry-failed", { method: "POST" }).then((d) =>
-      setStatus(d.error || `Retry started pid=${d.pid}`)
-    )
-  );
+  $("#btnRetry").addEventListener("click", retryFailedResume);
+  $("#btnRetryResume").addEventListener("click", retryFailedResume);
   $("#btnSaveDirs").addEventListener("click", () =>
     saveDirectories().catch((e) => {
       $("#dirMsg").textContent = e.message;
@@ -273,8 +294,8 @@ function wire() {
   $("#modelBody").addEventListener("change", (e) => {
     if (e.target.classList.contains("rowchk")) updateSelectedLabel();
   });
-  setInterval(pollStatus, 800);
-  setInterval(pollEvents, 1200);
+  setInterval(pollStatus, 1500);
+  setInterval(pollEvents, 2000);
   pollStatus();
   pollEvents();
 }

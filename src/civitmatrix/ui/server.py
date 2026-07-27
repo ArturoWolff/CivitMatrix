@@ -154,7 +154,11 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     base_model = str(body.get("baseModel") or "Anima")
     nsfw = bool(body.get("nsfw", True))
     sort = str(body.get("sort") or "Newest")
-    max_results = max(1, min(int(body.get("maxResults") or 200), 2000))
+    max_results = int(body.get("maxResults") if body.get("maxResults") is not None else 500)
+    if max_results <= 0:
+        max_results = 50_000
+    else:
+        max_results = max(1, min(max_results, 50_000))
     tag_include = parse_csv_list(body.get("tagInclude"))
     tag_exclude = parse_csv_list(body.get("tagExclude"))
     category = body.get("category") or None
@@ -216,10 +220,23 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "CivitMatrixUI/0.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+        try:
+            msg = fmt % args
+        except Exception:  # noqa: BLE001
+            msg = fmt
+        if any(
+            s in msg
+            for s in ("/api/status", "/api/events", "/favicon.ico", "code 404")
+        ):
+            return
+        sys.stderr.write("%s - %s\n" % (self.address_string(), msg))
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
         if parsed.path.startswith("/api/"):
             self._api_get(parsed.path, parse_qs(parsed.query))
             return
@@ -248,8 +265,9 @@ class Handler(BaseHTTPRequestHandler):
             _json_response(self, 200, {"exitCode": request_resume_cli(p["logs"], p["job"])})
             return
         if path == "/api/retry-failed":
+            request_resume_cli(p["logs"], p["job"])
             _json_response(
-                self, 200, _spawn_run(["--retry-failed", "--concurrency", "2"], p["root"])
+                self, 200, _spawn_run(["--cli", "--retry-failed", "--concurrency", "2"], p["root"])
             )
             return
         if path == "/api/directories":
@@ -297,6 +315,9 @@ class Handler(BaseHTTPRequestHandler):
         model_type = str(body.get("type") or "LORA")
         out_dir = path_for_type(dirs, model_type)
         selection = body.get("selection") or []
+        download_all = bool(body.get("downloadAll"))
+        if download_all:
+            selection = []
         manifest = {
             "type": model_type,
             "baseModel": body.get("baseModel") or "Anima",
@@ -309,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             "format": body.get("format"),
             "outDir": str(out_dir),
             "selection": selection,
+            "downloadAll": download_all,
         }
         p["manifest"].write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         argv = [
