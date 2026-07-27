@@ -72,6 +72,20 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(model_passes_filters(m, users=["bob"], category="Action"))
         self.assertFalse(model_passes_filters(m, users=["alice"]))
 
+    def test_all_means_no_format_filter(self):
+        m = _model(fmt="SafeTensor")
+        self.assertTrue(model_passes_filters(m, file_format="All"))
+        self.assertTrue(model_passes_filters(m, file_format="any"))
+        self.assertTrue(model_passes_filters(m, file_format=""))
+        self.assertFalse(model_passes_filters(m, file_format="GGUF"))
+
+    def test_updated_range(self):
+        m = _model()
+        m["modelVersions"][0]["publishedAt"] = "2024-06-15T12:00:00.000Z"
+        self.assertTrue(model_passes_filters(m, updated_from="2024-01-01", updated_to="2024-12-31"))
+        self.assertFalse(model_passes_filters(m, updated_from="2025-01-01"))
+        self.assertTrue(model_passes_filters(m))  # no bounds
+
     def test_summarize(self):
         row = summarize_model_for_ui(_model(tags=["x"]), base_model="Anima")
         self.assertEqual(row["id"], 1)

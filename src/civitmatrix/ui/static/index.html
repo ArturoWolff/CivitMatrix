@@ -33,53 +33,108 @@
       <section id="view-main" class="view active">
         <div class="row">
           <label class="field">Type
-            <select id="fType">
-              <option>LORA</option>
-              <option>LoCon</option>
-              <option>DoRA</option>
-              <option>Checkpoint</option>
-              <option>TextualInversion</option>
-              <option>VAE</option>
-              <option>Workflows</option>
+            <select id="fType" title="All = no type filter (every model type)">
+              <option value="All">All</option>
+              <option value="AestheticGradient">Aesthetic Gradient</option>
+              <option value="Checkpoint">Checkpoint</option>
+              <option value="Controlnet">Controlnet</option>
+              <option value="Detection">Detection</option>
+              <option value="DoRA">DoRA</option>
+              <option value="Hypernetwork">Hypernetwork</option>
+              <option value="LORA" selected>LoRA</option>
+              <option value="LoCon">LyCORIS</option>
+              <option value="MotionModule">Motion</option>
+              <option value="Other">Other</option>
+              <option value="Poses">Poses</option>
+              <option value="TextEncoder">Text Encoder</option>
+              <option value="TextualInversion">Embedding</option>
+              <option value="UNet">UNet</option>
+              <option value="Upscaler">Upscaler</option>
+              <option value="VAE">VAE</option>
+              <option value="LLM">VLM</option>
+              <option value="Wildcards">Wildcards</option>
+              <option value="Workflows">Workflows</option>
             </select>
           </label>
           <label class="field">Base
-            <input id="fBase" type="text" value="Anima" class="wide" />
+            <select id="fBase" class="wide" title="All = no base-model filter">
+              <option value="All">All</option>
+              <option value="Anima" selected>Anima</option>
+            </select>
           </label>
           <label class="field">Sort
-            <select id="fSort">
-              <option>Newest</option>
+            <select id="fSort" title="REST API sort values (not site Meilisearch keys)">
+              <option selected>Highest Rated</option>
               <option>Most Downloaded</option>
-              <option>Highest Rated</option>
               <option>Most Liked</option>
               <option>Most Discussed</option>
               <option>Most Collected</option>
-              <option>Most Buzz</option>
+              <option>Most Images</option>
+              <option>Newest</option>
+              <option>Oldest</option>
             </select>
           </label>
           <label class="field"><input id="fNsfw" type="checkbox" checked /> NSFW</label>
         </div>
         <div class="row">
-          <label class="field">Format
-            <select id="fFormat">
-              <option value="any">any</option>
-              <option value="SafeTensor">SafeTensor</option>
-              <option value="PickleTensor">PickleTensor</option>
+          <label class="field">Checkpoint
+            <select id="fCheckpoint" title="All = no Merge/Trained filter">
+              <option value="All" selected>All</option>
+              <option value="Merge">Merge</option>
+              <option value="Trained">Trained</option>
             </select>
           </label>
+          <label class="field">Updated from
+            <input id="fUpdatedFrom" type="date" title="Inclusive start (empty = no lower bound)" />
+          </label>
+          <label class="field">Updated to
+            <input id="fUpdatedTo" type="date" title="Inclusive end (empty = no upper bound)" />
+          </label>
+          <label class="field">Format
+            <select id="fFormat" title="All = no file-format filter">
+              <option value="All" selected>All</option>
+              <option value="SafeTensor">Safe Tensor</option>
+              <option value="PickleTensor">Pickle Tensor</option>
+              <option value="Pt">Pt</option>
+              <option value="GGUF">GGUF</option>
+              <option value="ONNX">ONNX</option>
+              <option value="Core ML">Core ML</option>
+              <option value="Diffusers">Diffusers</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
           <label class="field">Category
-            <input id="fCategory" type="text" placeholder="any" class="wide" />
+            <select id="fCategory" class="wide" title="All = no category filter">
+              <option value="All" selected>All</option>
+              <option>Action</option>
+              <option>Animal</option>
+              <option>Assets</option>
+              <option>Background</option>
+              <option>Base Model</option>
+              <option>Buildings</option>
+              <option>Celebrity</option>
+              <option>Character</option>
+              <option>Clothing</option>
+              <option>Concept</option>
+              <option>Objects</option>
+              <option>Poses</option>
+              <option>Style</option>
+              <option>Tool</option>
+              <option>Vehicle</option>
+            </select>
           </label>
           <label class="field">Users
-            <input id="fUsers" type="text" placeholder="comma usernames" class="wide" />
+            <input id="fUsers" type="text" placeholder="ArturoWolff, needsmoney, to_eat" class="wide" title="Comma-separated creator usernames (no @)" />
           </label>
         </div>
         <div class="row">
           <label class="field">Tags include
-            <input id="fTagInc" class="tag" type="text" placeholder="empty = all" />
+            <input id="fTagInc" class="tag" type="text" placeholder="empty = all · character, anime, detailed" title="Comma tags the model must have at least one of. Leave empty to include all tags." />
           </label>
           <label class="field">Tags exclude
-            <input id="fTagExc" class="tag" type="text" placeholder="empty = none" />
+            <input id="fTagExc" class="tag" type="text" placeholder="empty = none · nsfw, gore, lowres" title="Comma tags to exclude. Leave empty to exclude none." />
           </label>
         </div>
         <div class="row">

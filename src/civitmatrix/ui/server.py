@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
@@ -48,6 +49,8 @@ _run_lock = threading.Lock()
 _run_proc: subprocess.Popen[str] | None = None
 _session_token: str | None = None
 _fail_count_cache: tuple[float, int, int] | None = None  # mtime, size, count
+_enums_cache: tuple[float, dict[str, Any]] | None = None
+_enums_lock = threading.Lock()
 
 
 class BodyTooLarge(Exception):
@@ -233,16 +236,39 @@ def _trusted_base_url(dirs: dict[str, Any]) -> str:
     ).rstrip("/")
 
 
+def _fetch_enums(dirs_path: Path) -> dict[str, Any]:
+    """Proxy GET /api/v1/enums (cached ~10 min) for BaseModel dropdown etc."""
+    global _enums_cache
+    now = time.monotonic()
+    with _enums_lock:
+        if _enums_cache is not None and now - _enums_cache[0] < 600:
+            return _enums_cache[1]
+    api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
+    if not api_key:
+        return {"error": "CIVITAI_API_KEY missing", "BaseModel": ["Anima"]}
+    dirs = load_directories(dirs_path)
+    client = CivitClient(_trusted_base_url(dirs), api_key)
+    data = client.get_json(f"{client.base_url}/api/v1/enums")
+    if not isinstance(data, dict):
+        return {"error": "unexpected enums payload", "BaseModel": ["Anima"]}
+    with _enums_lock:
+        _enums_cache = (now, data)
+    return data
+
+
 def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
     if not api_key:
         return {"error": "CIVITAI_API_KEY missing", "items": [], "count": 0}
     dirs = load_directories(dirs_path)
     base_url = _trusted_base_url(dirs)
-    model_type = str(body.get("type") or "LORA")
-    base_model = str(body.get("baseModel") or "Anima")
+    model_type = str(body.get("type") or "All")
+    base_model = str(body.get("baseModel") or "All")
     nsfw = bool(body.get("nsfw", True))
-    sort = str(body.get("sort") or "Newest")
+    sort = str(body.get("sort") or "Highest Rated")
+    checkpoint_type = str(body.get("checkpointType") or "All")
+    updated_from = str(body.get("updatedFrom") or "").strip()
+    updated_to = str(body.get("updatedTo") or "").strip()
     max_results = int(body.get("maxResults") if body.get("maxResults") is not None else 500)
     if max_results <= 0:
         max_results = 50_000
@@ -254,9 +280,12 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     users = parse_csv_list(body.get("users"))
     file_format = body.get("format") or None
 
+    from civitmatrix.model_filters import is_all_filter
+
     client = CivitClient(base_url, api_key)
     items: list[dict[str, Any]] = []
     scanned = 0
+    summarize_base = None if is_all_filter(base_model) else base_model
     for model in iter_filtered_models(
         client,
         base_model=base_model,
@@ -268,9 +297,12 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
         category=category,
         users=users,
         file_format=file_format,
+        checkpoint_type=checkpoint_type,
+        updated_from=updated_from or None,
+        updated_to=updated_to or None,
     ):
         scanned += 1
-        items.append(summarize_model_for_ui(model, base_model=base_model))
+        items.append(summarize_model_for_ui(model, base_model=summarize_base))
         if len(items) >= max_results:
             break
         if scanned >= max_results * 20:
@@ -439,7 +471,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _start_run(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
         dirs = load_directories(p["dirs"])
-        model_type = str(body.get("type") or "LORA")
+        model_type = str(body.get("type") or "All")
         out_dir = path_for_type(dirs, model_type)
         os.environ["LORA_DIR"] = str(out_dir)
         selection = body.get("selection") or []
@@ -448,14 +480,17 @@ class Handler(BaseHTTPRequestHandler):
             selection = []
         manifest = {
             "type": model_type,
-            "baseModel": body.get("baseModel") or "Anima",
-            "sort": body.get("sort") or "Newest",
+            "baseModel": body.get("baseModel") or "All",
+            "sort": body.get("sort") or "Highest Rated",
             "nsfw": bool(body.get("nsfw", True)),
             "tagInclude": parse_csv_list(body.get("tagInclude")),
             "tagExclude": parse_csv_list(body.get("tagExclude")),
             "category": body.get("category"),
             "users": parse_csv_list(body.get("users")),
             "format": body.get("format"),
+            "checkpointType": body.get("checkpointType") or "All",
+            "updatedFrom": body.get("updatedFrom") or "",
+            "updatedTo": body.get("updatedTo") or "",
             "outDir": str(out_dir),
             "selection": selection,
             "downloadAll": download_all,
@@ -514,6 +549,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/directories":
             _json_response(self, 200, load_directories(p["dirs"]))
+            return
+        if path == "/api/enums":
+            try:
+                _json_response(self, 200, _fetch_enums(p["dirs"]))
+            except Exception as e:  # noqa: BLE001
+                _json_response(self, 500, {"error": str(e), "BaseModel": ["Anima"]})
             return
         _json_response(self, 404, {"error": "not found"})
 

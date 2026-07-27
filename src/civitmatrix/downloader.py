@@ -68,6 +68,9 @@ def run_batch(
     category: str = "",
     users: list[str] | None = None,
     file_format: str = "",
+    checkpoint_type: str = "All",
+    updated_from: str = "",
+    updated_to: str = "",
     selection_map: dict[int, list] | None = None,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -337,6 +340,9 @@ def run_batch(
             category=category,
             users=users or [],
             file_format=file_format,
+            checkpoint_type=checkpoint_type,
+            updated_from=updated_from,
+            updated_to=updated_to,
             selection_map=selection_map,
         )
 
@@ -438,6 +444,9 @@ def _iter_models_for_run(
     category: str = "",
     users: list[str] | None = None,
     file_format: str = "",
+    checkpoint_type: str = "All",
+    updated_from: str = "",
+    updated_to: str = "",
     selection_map: dict[int, list] | None = None,
 ) -> Iterator[dict[str, Any]]:
     logs_dir = logger.job_path.parent
@@ -450,11 +459,11 @@ def _iter_models_for_run(
             model,
             tag_include=tag_include,
             tag_exclude=tag_exclude,
-            category=category if category and str(category).lower() != "any" else None,
+            category=category,
             users=users,
-            file_format=file_format
-            if file_format and str(file_format).lower() != "any"
-            else None,
+            file_format=file_format,
+            updated_from=updated_from or None,
+            updated_to=updated_to or None,
         )
 
     if retry_failed:
@@ -570,6 +579,9 @@ def _iter_models_for_run(
         category=category,
         users=users,
         file_format=file_format,
+        checkpoint_type=checkpoint_type,
+        updated_from=updated_from or None,
+        updated_to=updated_to or None,
         username=username,
         on_page=on_page,
     ):

@@ -38,23 +38,30 @@ class CivitClient:
     def iter_models(
         self,
         *,
-        base_model: str,
-        model_type: str,
+        base_model: str | None = None,
+        model_type: str | None = None,
         nsfw: bool = True,
         sort: str = "Highest Rated",
         page_limit: int = 100,
         username: str | None = None,
         tag: str | None = None,
+        checkpoint_type: str | None = None,
         on_page: Callable[..., None] | None = None,
     ) -> Iterator[dict[str, Any]]:
+        from civitmatrix.model_filters import is_all_filter
+
         url = f"{self.base_url}/api/v1/models"
         params: dict[str, Any] = {
-            "baseModels": base_model,
-            "types": model_type,
             "nsfw": "true" if nsfw else "false",
             "limit": page_limit,
             "sort": sort,
         }
+        if not is_all_filter(base_model):
+            params["baseModels"] = str(base_model).strip()
+        if not is_all_filter(model_type):
+            params["types"] = str(model_type).strip()
+        if not is_all_filter(checkpoint_type):
+            params["checkpointType"] = str(checkpoint_type).strip()
         if username:
             params["username"] = username
         if tag:

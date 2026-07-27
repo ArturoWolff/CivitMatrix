@@ -18,6 +18,15 @@ const DIR_KEYS = [
   "Workflows",
   "Controlnet",
   "Upscaler",
+  "Hypernetwork",
+  "AestheticGradient",
+  "MotionModule",
+  "Poses",
+  "Wildcards",
+  "Detection",
+  "TextEncoder",
+  "UNet",
+  "LLM",
   "Other",
 ];
 
@@ -32,6 +41,15 @@ const SM_SUBDIRS = {
   Workflows: "Workflows",
   Controlnet: "ControlNet",
   Upscaler: "ESRGAN",
+  Hypernetwork: "Hypernetworks",
+  AestheticGradient: "AestheticGradients",
+  MotionModule: "Motion",
+  Poses: "Poses",
+  Wildcards: "Wildcards",
+  Detection: "Detection",
+  TextEncoder: "TextEncoders",
+  UNet: "UNet",
+  LLM: "VLM",
   Other: "Other",
 };
 
@@ -70,12 +88,15 @@ async function api(path, opts = {}) {
 function filterPayload() {
   const maxRaw = Number($("#fMax").value);
   return {
-    type: $("#fType").value,
-    baseModel: $("#fBase").value.trim() || "Anima",
+    type: $("#fType").value || "All",
+    baseModel: $("#fBase").value || "All",
     sort: $("#fSort").value,
     nsfw: $("#fNsfw").checked,
-    format: $("#fFormat").value,
-    category: $("#fCategory").value.trim() || "any",
+    format: $("#fFormat").value || "All",
+    checkpointType: $("#fCheckpoint").value || "All",
+    updatedFrom: $("#fUpdatedFrom").value || "",
+    updatedTo: $("#fUpdatedTo").value || "",
+    category: $("#fCategory").value || "All",
     users: $("#fUsers").value.trim(),
     tagInclude: $("#fTagInc").value.trim(),
     tagExclude: $("#fTagExc").value.trim(),
@@ -479,6 +500,36 @@ function wireNav() {
   });
 }
 
+async function loadBaseModels() {
+  const sel = $("#fBase");
+  const prev = sel.value || "Anima";
+  try {
+    const data = await api("/api/enums");
+    const list = Array.isArray(data.BaseModel) ? data.BaseModel : [];
+    if (!list.length) return;
+    sel.innerHTML = "";
+    const all = document.createElement("option");
+    all.value = "All";
+    all.textContent = "All";
+    sel.appendChild(all);
+    for (const name of list) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (prev === "All" || [...sel.options].some((o) => o.value === prev)) {
+      sel.value = prev;
+    } else if (list.includes("Anima")) {
+      sel.value = "Anima";
+    } else {
+      sel.value = "All";
+    }
+  } catch (e) {
+    setStatus(`Base model list: ${e.message}`);
+  }
+}
+
 function wire() {
   wireNav();
   try {
@@ -487,6 +538,7 @@ function wire() {
     applyTheme("win95");
   }
   $("#fTheme").addEventListener("change", (e) => applyTheme(e.target.value));
+  loadBaseModels().catch(() => {});
   $("#btnPopulate").addEventListener("click", populate);
   $("#btnStart").addEventListener("click", startRun);
   $("#btnPause").addEventListener("click", () => controlAction("/api/pause", "Pause"));

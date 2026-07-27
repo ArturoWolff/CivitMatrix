@@ -17,6 +17,15 @@ DEFAULT_TYPE_DIRS = {
     "Workflows": "Workflows",
     "Controlnet": "ControlNet",
     "Upscaler": "ESRGAN",
+    "Hypernetwork": "Hypernetworks",
+    "AestheticGradient": "AestheticGradients",
+    "MotionModule": "Motion",
+    "Poses": "Poses",
+    "Wildcards": "Wildcards",
+    "Detection": "Detection",
+    "TextEncoder": "TextEncoders",
+    "UNet": "UNet",
+    "LLM": "VLM",
     "Other": "Other",
 }
 
@@ -111,11 +120,16 @@ def save_directories(path: Path, data: dict[str, Any]) -> dict[str, Any]:
 
 def path_for_type(config: dict[str, Any], model_type: str) -> Path:
     paths = config.get("paths") or {}
-    key = model_type
+    key = (model_type or "").strip()
+    if not key or key.lower() in {"all", "*", "any"}:
+        root = config.get("modelsRoot") or default_directories().get("modelsRoot")
+        return Path(str(root))
     if key not in paths and key == "TextualInversion":
         key = "Embedding"
     if key not in paths and model_type in {"LoCon", "DoRA"}:
         key = "LORA"
+    if key not in paths and model_type == "LLM":
+        key = "LLM"
     raw = paths.get(key) or paths.get(model_type) or paths.get("LORA")
     if not raw:
         return Path(default_directories()["paths"]["LORA"])

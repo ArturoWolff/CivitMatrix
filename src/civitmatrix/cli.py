@@ -14,32 +14,64 @@ from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import print_status_cli
 
+# Public /api/v1/models sort enum (site Meilisearch labels like Relevancy / Most Buzz differ).
 SORT_CHOICES = [
     "Highest Rated",
     "Most Downloaded",
-    "Newest",
     "Most Liked",
     "Most Discussed",
     "Most Collected",
-    "Most Buzz",
+    "Most Images",
+    "Newest",
+    "Oldest",
 ]
 
 TYPE_CHOICES = [
-    "Checkpoint",
-    "TextualInversion",
-    "Hypernetwork",
+    "All",
     "AestheticGradient",
-    "LORA",
-    "LoCon",
-    "DoRA",
+    "Checkpoint",
     "Controlnet",
-    "Upscaler",
+    "Detection",
+    "DoRA",
+    "Hypernetwork",
+    "LORA",
+    "LoCon",  # LyCORIS in civit.red UI
+    "LLM",  # VLM in civit.red UI
     "MotionModule",
-    "VAE",
+    "Other",
     "Poses",
+    "TextEncoder",
+    "TextualInversion",  # Embedding in civit.red UI
+    "UNet",
+    "Upscaler",
+    "VAE",
     "Wildcards",
     "Workflows",
-    "Other",
+]
+
+CHECKPOINT_TYPE_CHOICES = [
+    "All",
+    "Merge",
+    "Trained",
+]
+
+CATEGORY_CHOICES = [
+    "All",
+    "Action",
+    "Animal",
+    "Assets",
+    "Background",
+    "Base Model",
+    "Buildings",
+    "Celebrity",
+    "Character",
+    "Clothing",
+    "Concept",
+    "Objects",
+    "Poses",
+    "Style",
+    "Tool",
+    "Vehicle",
 ]
 
 
@@ -70,20 +102,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--base-model",
         default=None,
-        help="CivitAI base model filter (default: env BASE_MODEL or Anima)",
+        help="CivitAI base model filter (default: env BASE_MODEL or Anima; All = no filter)",
     )
     p.add_argument(
         "--type",
         dest="model_type",
         default=None,
         choices=TYPE_CHOICES,
-        help="CivitAI model type (default: env MODEL_TYPE or LORA)",
+        help="CivitAI model type (default: env MODEL_TYPE or LORA; All = no filter)",
     )
     p.add_argument(
         "--sort",
         default=None,
         choices=SORT_CHOICES,
         help="Listing sort order (default: env SORT or Highest Rated)",
+    )
+    p.add_argument(
+        "--checkpoint-type",
+        default=None,
+        choices=CHECKPOINT_TYPE_CHOICES,
+        help="Checkpoint type filter: Merge / Trained / All (no filter)",
+    )
+    p.add_argument(
+        "--updated-from",
+        default="",
+        help="Inclusive start date (YYYY-MM-DD) for last updated filter",
+    )
+    p.add_argument(
+        "--updated-to",
+        default="",
+        help="Inclusive end date (YYYY-MM-DD) for last updated filter",
     )
     p.add_argument(
         "--out",
@@ -209,14 +257,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--tag-include", type=str, default="", help="Comma tags include")
     p.add_argument("--tag-exclude", type=str, default="", help="Comma tags exclude")
-    p.add_argument("--category", type=str, default="", help="Category filter")
+    p.add_argument(
+        "--category",
+        type=str,
+        default="All",
+        choices=CATEGORY_CHOICES,
+        help="Category filter (All = no filter)",
+    )
     p.add_argument("--users", type=str, default="", help="Comma creator usernames")
     p.add_argument(
         "--format",
         dest="file_format",
         type=str,
-        default="",
-        help="File format filter (SafeTensor, …)",
+        default="All",
+        choices=FORMAT_CHOICES,
+        help="File format filter (All = no filter)",
     )
     return p
 
@@ -268,9 +323,12 @@ def main(argv: list[str] | None = None) -> int:
     base_model = args.base_model or os.environ.get("BASE_MODEL", "Anima")
     model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
     sort = args.sort or os.environ.get("SORT", "Highest Rated")
+    checkpoint_type = args.checkpoint_type or "All"
+    updated_from = (args.updated_from or "").strip()
+    updated_to = (args.updated_to or "").strip()
 
     from civitmatrix.directories_config import load_directories, path_for_type
-    from civitmatrix.model_filters import parse_csv_list
+    from civitmatrix.model_filters import is_all_filter, parse_csv_list
 
     job_manifest: dict = {}
     selection_map: dict[int, list] = {}
@@ -281,6 +339,9 @@ def main(argv: list[str] | None = None) -> int:
         base_model = str(job_manifest.get("baseModel") or base_model)
         model_type = str(job_manifest.get("type") or model_type)
         sort = str(job_manifest.get("sort") or sort)
+        checkpoint_type = str(job_manifest.get("checkpointType") or checkpoint_type)
+        updated_from = str(job_manifest.get("updatedFrom") or updated_from).strip()
+        updated_to = str(job_manifest.get("updatedTo") or updated_to).strip()
         for row in job_manifest.get("selection") or []:
             try:
                 selection_map[int(row["modelId"])] = list(row.get("versionIds") or ["latest"])
@@ -302,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     tag_exclude = parse_csv_list(args.tag_exclude) or list(job_manifest.get("tagExclude") or [])
     category = args.category or job_manifest.get("category") or ""
     users = parse_csv_list(args.users) or list(job_manifest.get("users") or [])
-    file_format = args.file_format or job_manifest.get("format") or ""
+    file_format = args.file_format or job_manifest.get("format") or "All"
 
     if not out_dir.is_absolute():
         out_dir = (root / out_dir).resolve()
@@ -315,6 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.match_base_version is not None
         else _env_bool("MATCH_BASE_VERSION", True)
     )
+    if is_all_filter(base_model):
+        match_base = False
+
     keep_partials = (
         args.keep_partials
         if args.keep_partials is not None
@@ -373,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
         category=category,
         users=users,
         file_format=file_format,
+        checkpoint_type=checkpoint_type,
+        updated_from=updated_from,
+        updated_to=updated_to,
         selection_map=selection_map,
     )
 

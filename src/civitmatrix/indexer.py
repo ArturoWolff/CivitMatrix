@@ -87,8 +87,9 @@ def pick_matching_version(
     versions = model.get("modelVersions") or []
     if not versions:
         return None
-    if match_base_version:
-        matched = [v for v in versions if (v.get("baseModel") or "") == base_model]
+    want = (base_model or "").strip()
+    if match_base_version and want and want.lower() not in {"all", "*", "any"}:
+        matched = [v for v in versions if (v.get("baseModel") or "") == want]
         if not matched:
             return None
         matched.sort(key=lambda v: int(v.get("id") or 0), reverse=True)

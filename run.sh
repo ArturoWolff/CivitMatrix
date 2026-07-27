@@ -7,10 +7,9 @@ cd "$ROOT"
 if [[ ! -d .venv ]]; then
   python3 -m venv .venv
 fi
-# shellcheck disable=SC1091
-source .venv/bin/activate
-python -m pip install -q --upgrade pip
-python -m pip install -q -e .
+PY="${ROOT}/.venv/bin/python"
+"$PY" -m pip install -q --upgrade pip
+"$PY" -m pip install -q -e .
 
 mkdir -p logs downloads/Lora
 
@@ -23,11 +22,20 @@ fi
 # Default: Win95 UI. Headless: ./run.sh --cli …
 if [[ "${1:-}" == "--cli" ]]; then
   shift
-  exec python -m civitmatrix --cli "$@"
+  exec "$PY" -m civitmatrix --cli "$@"
 fi
 
+# Allow UI flags without forcing CLI mode
 if [[ $# -gt 0 ]]; then
-  exec python -m civitmatrix --cli "$@"
+  for a in "$@"; do
+    case "$a" in
+      --ui|--no-open) ;;
+      -*)
+        exec "$PY" -m civitmatrix --cli "$@"
+        ;;
+    esac
+  done
+  exec "$PY" -m civitmatrix --ui "$@"
 fi
 
-exec python -m civitmatrix --ui
+exec "$PY" -m civitmatrix --ui

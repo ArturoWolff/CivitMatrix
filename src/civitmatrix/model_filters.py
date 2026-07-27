@@ -1,8 +1,17 @@
-"""Client-side model filter helpers (tags, category, users)."""
+"""Client-side model filter helpers (tags, category, users, format, dates)."""
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Any, Iterable
+
+
+def is_all_filter(value: Any) -> bool:
+    """True when the filter means 'no constraint' (show everything)."""
+    if value is None:
+        return True
+    s = str(value).strip().lower()
+    return s in {"", "all", "*", "any"}
 
 
 def model_tag_names(model: dict[str, Any]) -> list[str]:
@@ -52,11 +61,7 @@ def matches_tag_filters(
 
 def matches_category(model: dict[str, Any], category: str | None) -> bool:
     """Category is a dedicated dim (not tags). Match against model.category or tags."""
-    if not category or not str(category).strip() or str(category).strip().lower() in {
-        "any",
-        "*",
-        "all",
-    }:
+    if is_all_filter(category):
         return True
     want = str(category).strip().lower()
     cat = model.get("category") or model.get("modelCategory")
@@ -68,30 +73,125 @@ def matches_category(model: dict[str, Any], category: str | None) -> bool:
 
 def matches_users(model: dict[str, Any], users: Iterable[str] | None) -> bool:
     """Empty users → any creator. Non-empty → creator username in list (case-insensitive)."""
-    allow = [u.lower() for u in (users or []) if u]
+    allow = [str(u).lstrip("@").lower() for u in (users or []) if u]
     if not allow:
         return True
     creator = (model.get("creator") or {}).get("username") or ""
-    return str(creator).lower() in allow
+    return str(creator).lstrip("@").lower() in allow
+
+
+_FORMAT_ALIASES: dict[str, set[str]] = {
+    "safetensor": {"safetensor", "safetensors"},
+    "pickletensor": {"pickletensor", "pickle", "pickle tensor"},
+    "pt": {"pt", "pytorch", "torch"},
+    "gguf": {"gguf"},
+    "onnx": {"onnx"},
+    "core ml": {"core ml", "coreml", "mlmodel", "mlpackage"},
+    "coreml": {"core ml", "coreml", "mlmodel", "mlpackage"},
+    "diffusers": {"diffusers"},
+    "other": {"other"},
+}
+
+_FORMAT_EXTS: dict[str, tuple[str, ...]] = {
+    "safetensor": (".safetensors",),
+    "pickletensor": (".pt", ".bin", ".pkl", ".pickle"),
+    "pt": (".pt",),
+    "gguf": (".gguf",),
+    "onnx": (".onnx",),
+    "core ml": (".mlmodel", ".mlpackage"),
+    "coreml": (".mlmodel", ".mlpackage"),
+    "diffusers": (),
+    "other": (),
+}
+
+
+def _normalize_format_key(fmt: str) -> str:
+    s = str(fmt).strip().lower().replace("_", " ")
+    s = " ".join(s.split())
+    if s in {"safe tensor", "safe tensors", "safetensors"}:
+        return "safetensor"
+    if s in {"pickle tensor", "pickle tensors", "pickletensors"}:
+        return "pickletensor"
+    return s
 
 
 def matches_format(model: dict[str, Any], fmt: str | None) -> bool:
-    """Format dim: SafeTensor / PickleTensor / etc. Empty/any → pass."""
-    if not fmt or str(fmt).strip().lower() in {"any", "*", "all", ""}:
+    """Format dim: SafeTensor / PickleTensor / GGUF / … Empty/All → pass."""
+    if is_all_filter(fmt):
         return True
-    want = str(fmt).strip().lower()
+    want = _normalize_format_key(str(fmt))
+    aliases = _FORMAT_ALIASES.get(want, {want})
+    exts = _FORMAT_EXTS.get(want, ())
     for ver in model.get("modelVersions") or []:
         for f in ver.get("files") or []:
             meta = f.get("metadata") or {}
-            fmt_val = (meta.get("format") or f.get("format") or "").lower()
-            if want in fmt_val or fmt_val == want:
+            fmt_val = _normalize_format_key(meta.get("format") or f.get("format") or "")
+            if fmt_val in aliases or any(a in fmt_val for a in aliases if a):
                 return True
             name = str(f.get("name") or "").lower()
-            if want == "safetensor" and name.endswith(".safetensors"):
+            if exts and any(name.endswith(ext) for ext in exts):
                 return True
-            if want in {"pickletensor", "pickle"} and name.endswith(".pt"):
+            if want == "diffusers" and ("diffusers" in name or "/unet/" in name):
                 return True
     return False
+
+
+def _parse_iso_date(raw: Any) -> date | None:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            return None
+
+
+def model_last_updated_date(model: dict[str, Any]) -> date | None:
+    """Best-effort last-updated day from model / newest version timestamps."""
+    candidates: list[date] = []
+    for key in ("lastVersionAt", "updatedAt", "publishedAt", "createdAt"):
+        d = _parse_iso_date(model.get(key))
+        if d:
+            candidates.append(d)
+    for ver in model.get("modelVersions") or []:
+        for key in ("publishedAt", "updatedAt", "createdAt"):
+            d = _parse_iso_date(ver.get(key))
+            if d:
+                candidates.append(d)
+    return max(candidates) if candidates else None
+
+
+def matches_updated_range(
+    model: dict[str, Any],
+    *,
+    updated_from: str | date | None = None,
+    updated_to: str | date | None = None,
+) -> bool:
+    """Inclusive From/To on last-updated day. Empty bounds → no constraint."""
+    start = _parse_iso_date(updated_from)
+    end = _parse_iso_date(updated_to)
+    if start is None and end is None:
+        return True
+    got = model_last_updated_date(model)
+    if got is None:
+        return False
+    if start is not None and got < start:
+        return False
+    if end is not None and got > end:
+        return False
+    return True
 
 
 def model_passes_filters(
@@ -102,21 +202,25 @@ def model_passes_filters(
     category: str | None = None,
     users: Iterable[str] | None = None,
     file_format: str | None = None,
+    updated_from: str | date | None = None,
+    updated_to: str | date | None = None,
 ) -> bool:
     return (
         matches_tag_filters(model, tag_include=tag_include, tag_exclude=tag_exclude)
         and matches_category(model, category)
         and matches_users(model, users)
         and matches_format(model, file_format)
+        and matches_updated_range(model, updated_from=updated_from, updated_to=updated_to)
     )
 
 
 def summarize_model_for_ui(model: dict[str, Any], *, base_model: str | None = None) -> dict[str, Any]:
     """Compact row for Populate table."""
     versions_out: list[dict[str, Any]] = []
+    filter_base = base_model if not is_all_filter(base_model) else None
     for ver in model.get("modelVersions") or []:
-        if base_model:
-            if (ver.get("baseModel") or "") != base_model:
+        if filter_base:
+            if (ver.get("baseModel") or "") != filter_base:
                 continue
         files = ver.get("files") or []
         primary = next((f for f in files if f.get("primary")), None) or (
