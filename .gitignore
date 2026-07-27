@@ -60,3 +60,4 @@ Thumbs.db
 *~
 logs/directories.json
 logs/ui_job_manifest.json
+logs/.ui-session

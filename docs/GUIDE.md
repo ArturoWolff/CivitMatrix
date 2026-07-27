@@ -73,9 +73,9 @@ SKIP_VERIFY=false
 CLI overrides env for a single run:
 
 ```bash
-./run.sh --base-model Pony --type LORA --sort Newest --concurrency 3 --limit 50
-./run.sh --no-nsfw --dry-run
-./run.sh --no-match-base-version   # take newest version regardless of base
+./run.sh --cli --base-model Pony --type LORA --sort Newest --concurrency 3 --limit 50
+./run.sh --cli --no-nsfw --dry-run
+./run.sh --cli --no-match-base-version   # take newest version regardless of base
 ```
 
 ## Recommended workflow
@@ -84,7 +84,7 @@ CLI overrides env for a single run:
 2. Point `LORA_DIR` at SM  
 3. Full run (or `--limit` while testing)  
 4. Watch `logs/failed.jsonl` for gated files  
-5. `./run.sh --retry-failed` later  
+5. `./run.sh --cli --retry-failed` later  
 6. Refresh SM index  
 
 ## Control plane (long runs)
@@ -94,7 +94,7 @@ While a batch is running, open a **second terminal** in the same repo folder:
 | Command | Effect |
 |---------|--------|
 | `./run.sh --status` | Print phase, counts, current model, flags, lock |
-| `./run.sh --status --json` | Same data as JSON (for scripts / future UI) |
+| `./run.sh --status --json` | Same data as JSON (for scripts / UI) |
 | `./run.sh --pause` | Finish the current download, then wait |
 | `./run.sh --resume` | Clear pause and continue |
 | `./run.sh --cancel` | Cooperative stop after in-flight work |
@@ -165,9 +165,9 @@ Still images prefer the API image URL; video previews become `.preview.mp4`.
 Downloads write to `*.safetensors.partial` then rename into place. If the process dies mid-file, the next run **keeps** that partial and sends `Range: bytes={offset}-` to continue (event `download_resume`). If the server ignores Range (HTTP 200) or returns 416, the client restarts a full download.
 
 ```bash
-./run.sh                            # resume weight partials by default
-./run.sh --no-resume-partials       # delete/ignore partials; full re-get
-./run.sh --keep-partials            # also keep preview download temps on start
+./run.sh --cli                      # resume weight partials by default
+./run.sh --cli --no-resume-partials # delete/ignore partials; full re-get
+./run.sh --cli --keep-partials      # also keep preview download temps on start
 ```
 
 On start, preview `*.preview.download*` temps are still purged (`partial_purged`); weight partials are left alone for resume.
@@ -188,10 +188,10 @@ Cache files live under `logs/listing-cache/` as `<key>.meta.json` + `<key>.jsonl
 **Freshness:** only caches with `complete: true` are reused. A run stopped early by `--limit` or cancel leaves `complete: false`, so the next `--use-listing-cache` run still hits the API. A cache **hit** still respects `--limit` (only the first N models are processed). `--retry-failed` never uses the listing cache.
 
 ```bash
-./run.sh --dry-run --use-listing-cache          # build cache while listing (no limit → complete)
-./run.sh --dry-run --use-listing-cache          # second run: cache hit, no listing HTTP
-./run.sh --dry-run --use-listing-cache --refresh-listing   # force fresh list + rewrite cache
-./run.sh --dry-run --limit 5 --use-listing-cache           # partial cache; next run still re-lists
+./run.sh --cli --dry-run --use-listing-cache          # build cache while listing (no limit → complete)
+./run.sh --cli --dry-run --use-listing-cache          # second run: cache hit, no listing HTTP
+./run.sh --cli --dry-run --use-listing-cache --refresh-listing   # force fresh list + rewrite cache
+./run.sh --cli --dry-run --limit 5 --use-listing-cache           # partial cache; next run still re-lists
 ```
 
 Events: `listing_cache_hit`, `listing_cache_miss`, `listing_cache_write` in `logs/events.jsonl`.
@@ -209,8 +209,8 @@ After each weight download (including Range resume), CivitMatrix hashes the file
 | Stale API BLAKE3 but `by-hash(local)` matches version | `verify_ok_stale_meta`; file kept |
 
 ```bash
-./run.sh                      # verify on (default)
-./run.sh --skip-verify        # opt out
+./run.sh --cli                # verify on (default)
+./run.sh --cli --skip-verify        # opt out
 ```
 
 ## Latest-only versions (default)
@@ -247,9 +247,9 @@ Tag filters: empty include = all tags; empty exclude = exclude none; both set = 
 If index counts don’t match (`blake3` / `versions` / `stems`), some files are missing metadata or have orphan sidecars. Heal consolidates the folder:
 
 ```bash
-./run.sh --heal --dry-run          # report what would change
-./run.sh --heal                    # repair incomplete .cm-info.json (+ preview)
-./run.sh --heal --purge-orphans    # also delete sidecars with no matching weight
+./run.sh --cli --heal --dry-run          # report what would change
+./run.sh --cli --heal                    # repair incomplete .cm-info.json (+ preview)
+./run.sh --cli --heal --purge-orphans    # also delete sidecars with no matching weight
 ```
 
 What it does:

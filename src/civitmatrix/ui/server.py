@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -19,19 +20,38 @@ from dotenv import load_dotenv
 
 from civitmatrix.browse_dir import browse_directory
 from civitmatrix.cancel_control import request_cancel_cli
+from civitmatrix.catalog import iter_filtered_models
 from civitmatrix.client import CivitClient
 from civitmatrix.directories_config import (
     load_directories,
     path_for_type,
     save_directories,
 )
-from civitmatrix.model_filters import (
-    model_passes_filters,
-    parse_csv_list,
-    summarize_model_for_ui,
-)
+from civitmatrix.model_filters import parse_csv_list, summarize_model_for_ui
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import build_status_snapshot
+
+MAX_BODY_BYTES = 2 * 1024 * 1024
+SESSION_HEADER = "X-CivitMatrix-Token"
+MUTATING_POST = {
+    "/api/populate",
+    "/api/run",
+    "/api/cancel",
+    "/api/pause",
+    "/api/resume",
+    "/api/retry-failed",
+    "/api/directories",
+    "/api/browse-dir",
+}
+
+_run_lock = threading.Lock()
+_run_proc: subprocess.Popen[str] | None = None
+_session_token: str | None = None
+_fail_count_cache: tuple[float, int, int] | None = None  # mtime, size, count
+
+
+class BodyTooLarge(Exception):
+    pass
 
 
 def _cwd_root() -> Path:
@@ -49,10 +69,6 @@ def _static_dir() -> Path:
         return here
 
 
-_run_lock = threading.Lock()
-_run_proc: subprocess.Popen[str] | None = None
-
-
 def _paths() -> dict[str, Path]:
     root = _cwd_root()
     logs = root / "logs"
@@ -64,8 +80,51 @@ def _paths() -> dict[str, Path]:
         "events": logs / "events.jsonl",
         "dirs": logs / "directories.json",
         "manifest": logs / "ui_job_manifest.json",
+        "session": logs / ".ui-session",
         "static": _static_dir(),
     }
+
+
+def ensure_ui_session(logs: Path) -> str:
+    """Create/rotate UI session token under logs/.ui-session (mode 0600)."""
+    global _session_token
+    logs.mkdir(parents=True, exist_ok=True)
+    path = logs / ".ui-session"
+    token = secrets.token_urlsafe(32)
+    path.write_text(token + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    _session_token = token
+    return token
+
+
+def current_session_token(session_path: Path) -> str | None:
+    global _session_token
+    if _session_token:
+        return _session_token
+    if not session_path.is_file():
+        return None
+    try:
+        tok = session_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    _session_token = tok or None
+    return _session_token
+
+
+def token_ok(handler: BaseHTTPRequestHandler, session_path: Path) -> bool:
+    expected = current_session_token(session_path)
+    if not expected:
+        return False
+    got = handler.headers.get(SESSION_HEADER) or ""
+    if not got:
+        return False
+    try:
+        return secrets.compare_digest(got.strip(), expected)
+    except (TypeError, ValueError):
+        return False
 
 
 def _json_response(handler: BaseHTTPRequestHandler, code: int, payload: Any) -> None:
@@ -82,6 +141,8 @@ def _read_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length") or 0)
     if length <= 0:
         return {}
+    if length > MAX_BODY_BYTES:
+        raise BodyTooLarge(length)
     raw = handler.rfile.read(length)
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -90,26 +151,27 @@ def _read_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _latest_failures(failed_path: Path) -> list[dict[str, Any]]:
+def _stream_latest_failures(failed_path: Path) -> list[dict[str, Any]]:
     if not failed_path.exists():
         return []
     latest: dict[int, dict[str, Any]] = {}
-    for line in failed_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        mid = row.get("modelId")
-        if mid is None:
-            continue
-        latest[int(mid)] = row
+    with failed_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            mid = row.get("modelId")
+            if mid is None:
+                continue
+            latest[int(mid)] = row
     return list(latest.values())
 
 
-def _retryable_failures(failed_path: Path) -> list[dict[str, Any]]:
+def _retryable_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     skip = {
         "forbidden_or_early_access",
         "not_found",
@@ -117,7 +179,7 @@ def _retryable_failures(failed_path: Path) -> list[dict[str, Any]]:
         "no_files",
     }
     out = []
-    for row in _latest_failures(failed_path):
+    for row in rows:
         if not row.get("retryable", True):
             continue
         if row.get("reason") in skip:
@@ -126,19 +188,49 @@ def _retryable_failures(failed_path: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _retryable_failure_count(failed_path: Path) -> int:
+    """Cached count for status polls — invalidate on mtime/size change."""
+    global _fail_count_cache
+    if not failed_path.exists():
+        _fail_count_cache = None
+        return 0
+    st = failed_path.stat()
+    key = (st.st_mtime, st.st_size)
+    if _fail_count_cache and _fail_count_cache[0] == key[0] and _fail_count_cache[1] == key[1]:
+        return _fail_count_cache[2]
+    count = len(_retryable_from_rows(_stream_latest_failures(failed_path)))
+    _fail_count_cache = (key[0], key[1], count)
+    return count
+
+
 def _events_after(events_path: Path, after: int, limit: int = 200) -> dict[str, Any]:
+    """Stream lines; never load the whole file into memory."""
     if not events_path.exists():
         return {"after": 0, "lines": [], "next": 0}
-    lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
     start = max(0, int(after))
-    chunk = lines[start : start + limit]
-    parsed = []
-    for line in chunk:
-        try:
-            parsed.append(json.loads(line))
-        except json.JSONDecodeError:
-            parsed.append({"raw": line})
-    return {"after": start, "lines": parsed, "next": start + len(chunk)}
+    parsed: list[Any] = []
+    idx = 0
+    with events_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if idx < start:
+                idx += 1
+                continue
+            if len(parsed) >= limit:
+                break
+            line = line.rstrip("\n")
+            try:
+                parsed.append(json.loads(line))
+            except json.JSONDecodeError:
+                parsed.append({"raw": line})
+            idx += 1
+    return {"after": start, "lines": parsed, "next": start + len(parsed)}
+
+
+def _trusted_base_url(dirs: dict[str, Any]) -> str:
+    """API host from env / saved directories only — never from request body."""
+    return str(
+        dirs.get("baseUrl") or os.environ.get("CIVITAI_BASE_URL", "https://civitai.red")
+    ).rstrip("/")
 
 
 def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
@@ -146,11 +238,7 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     if not api_key:
         return {"error": "CIVITAI_API_KEY missing", "items": [], "count": 0}
     dirs = load_directories(dirs_path)
-    base_url = str(
-        body.get("baseUrl")
-        or dirs.get("baseUrl")
-        or os.environ.get("CIVITAI_BASE_URL", "https://civitai.red")
-    ).rstrip("/")
+    base_url = _trusted_base_url(dirs)
     model_type = str(body.get("type") or "LORA")
     base_model = str(body.get("baseModel") or "Anima")
     nsfw = bool(body.get("nsfw", True))
@@ -165,30 +253,23 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     category = body.get("category") or None
     users = parse_csv_list(body.get("users"))
     file_format = body.get("format") or None
-    username = users[0] if len(users) == 1 else None
 
     client = CivitClient(base_url, api_key)
     items: list[dict[str, Any]] = []
     scanned = 0
-    for model in client.iter_models(
+    for model in iter_filtered_models(
+        client,
         base_model=base_model,
         model_type=model_type,
         nsfw=nsfw,
         sort=sort,
-        username=username,
+        tag_include=tag_include,
+        tag_exclude=tag_exclude,
+        category=category,
+        users=users,
+        file_format=file_format,
     ):
         scanned += 1
-        if not model_passes_filters(
-            model,
-            tag_include=tag_include,
-            tag_exclude=tag_exclude,
-            category=category if category and str(category).lower() != "any" else None,
-            users=users if len(users) != 1 else None,
-            file_format=file_format,
-        ):
-            continue
-        if users and len(users) > 1 and not model_passes_filters(model, users=users):
-            continue
         items.append(summarize_model_for_ui(model, base_model=base_model))
         if len(items) >= max_results:
             break
@@ -223,7 +304,7 @@ def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CivitMatrixUI/0.1"
+    server_version = "CivitMatrixUI/0.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         try:
@@ -232,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             msg = fmt
         if any(
             s in msg
-            for s in ("/api/status", "/api/events", "/favicon.ico", "code 404")
+            for s in ("/api/status", "/api/events", "/api/session", "/favicon.ico", "code 404")
         ):
             return
         sys.stderr.write("%s - %s\n" % (self.address_string(), msg))
@@ -251,7 +332,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         p = _paths()
         path = urlparse(self.path).path
-        body = _read_body(self)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY_BYTES:
+            _json_response(self, 413, {"error": "request body too large"})
+            return
+        if path in MUTATING_POST and not token_ok(self, p["session"]):
+            _json_response(self, 401, {"error": "missing or invalid UI session token"})
+            return
+        try:
+            body = _read_body(self)
+        except BodyTooLarge:
+            _json_response(self, 413, {"error": "request body too large"})
+            return
         if path == "/api/populate":
             try:
                 _json_response(self, 200, _populate(body, p["dirs"]))
@@ -383,8 +475,15 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("keepOldVersions"):
             argv.append("--keep-old-versions")
         return _spawn_run(argv, p["root"])
+
     def _api_get(self, path: str, qs: dict[str, list[str]]) -> None:
         p = _paths()
+        if path == "/api/session":
+            tok = current_session_token(p["session"])
+            if not tok:
+                tok = ensure_ui_session(p["logs"])
+            _json_response(self, 200, {"token": tok})
+            return
         if path == "/api/status":
             snap = build_status_snapshot(p["logs"], p["job"])
             with _run_lock:
@@ -397,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
                     "job": snap,
                     "uiRunAlive": alive,
                     "uiRunPid": pid,
-                    "retryableFailures": len(_retryable_failures(p["failed"])),
+                    "retryableFailures": _retryable_failure_count(p["failed"]),
                 },
             )
             return
@@ -406,13 +505,11 @@ class Handler(BaseHTTPRequestHandler):
             _json_response(self, 200, _events_after(p["events"], after))
             return
         if path == "/api/failures":
+            rows = _stream_latest_failures(p["failed"])
             _json_response(
                 self,
                 200,
-                {
-                    "all": _latest_failures(p["failed"]),
-                    "retryable": _retryable_failures(p["failed"]),
-                },
+                {"all": rows, "retryable": _retryable_from_rows(rows)},
             )
             return
         if path == "/api/directories":
@@ -424,8 +521,13 @@ class Handler(BaseHTTPRequestHandler):
         static = _paths()["static"]
         if path in {"", "/"}:
             path = "/index.html"
-        file_path = (static / path.lstrip("/")).resolve()
-        if not str(file_path).startswith(str(static.resolve())) or not file_path.is_file():
+        try:
+            file_path = (static / path.lstrip("/")).resolve()
+            file_path.relative_to(static.resolve())
+        except (ValueError, OSError):
+            self.send_error(404)
+            return
+        if not file_path.is_file():
             self.send_error(404)
             return
         data = file_path.read_bytes()
@@ -447,6 +549,7 @@ def run_ui(*, open_browser: bool = True, port: int | None = None) -> int:
     load_dotenv(_cwd_root() / ".env")
     p = _paths()
     p["logs"].mkdir(parents=True, exist_ok=True)
+    ensure_ui_session(p["logs"])
     if not p["dirs"].exists():
         save_directories(p["dirs"], load_directories(p["dirs"]))
     host = "127.0.0.1"

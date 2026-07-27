@@ -2,6 +2,8 @@
 
 CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
+**Current package version: 0.2.0** (filters + local Win95 UI shipped).
+
 ## v0.1 — shipped
 
 - [x] Cross-platform CLI (`python -m civitmatrix`, `run.sh`, `run.ps1`)
@@ -28,12 +30,13 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
 ## v0.2 — Filters
 
-- [ ] Tag include / exclude  
+- [x] Tag include / exclude  
 - [ ] Min downloads / likes  
-- [ ] Creator allow / deny  
+- [x] Creator allow / deny (`--users`)  
 - [ ] True **base-only** (exclude multi-base models)  
 - [ ] Date range + NSFW level caps  
 - [ ] Filter presets (JSON import/export)
+- [x] Category + file format dims (CLI + UI)
 
 ## v0.3 — Categorizing
 

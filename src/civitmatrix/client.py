@@ -8,6 +8,7 @@ import requests
 
 from civitmatrix import __version__
 from civitmatrix.download_progress import DownloadProgress
+from civitmatrix.http_policy import OriginMismatch, assert_same_origin
 
 DownloadEventFn = Callable[[str, dict[str, Any]], None]
 
@@ -15,14 +16,19 @@ DownloadEventFn = Callable[[str, dict[str, Any]], None]
 class CivitClient:
     def __init__(self, base_url: str, api_key: str, timeout: int = 120) -> None:
         self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        ua = f"civitmatrix/{__version__}"
+        # API session carries Bearer for list/metadata only.
         self.session = requests.Session()
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
-                "User-Agent": f"civitmatrix/{__version__}",
+                "User-Agent": ua,
             }
         )
-        self.timeout = timeout
+        # Download session never sends Authorization (CDN / third-party hosts).
+        self.download_session = requests.Session()
+        self.download_session.headers.update({"User-Agent": ua})
 
     def get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         r = self.session.get(url, params=params, timeout=self.timeout)
@@ -66,7 +72,8 @@ class CivitClient:
                 yield item
             if not next_page:
                 break
-            url = next_page
+            assert_same_origin(str(next_page), self.base_url)
+            url = str(next_page)
             params = None
             time.sleep(0.35)
 
@@ -96,6 +103,7 @@ class CivitClient:
         Download to dest via ``dest.partial``.
         When resume=True and a partial exists, send HTTP Range and append on 206.
         Network errors keep the partial for a later retry; auth/404 clear it.
+        Uses a session without Authorization so redirects cannot leak the API key.
         """
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".partial")
@@ -118,7 +126,7 @@ class CivitClient:
                     mode = "ab"
                     emit("download_resume", path=str(tmp), offset=existing, attempt=attempt)
 
-                with self.session.get(
+                with self.download_session.get(
                     url,
                     stream=True,
                     timeout=self.timeout,
@@ -131,7 +139,6 @@ class CivitClient:
                         raise FileNotFoundError(f"HTTP 404 downloading {url}")
 
                     if existing > 0 and r.status_code == 416:
-                        # Unsatisfiable — partial is stale/corrupt
                         tmp.unlink(missing_ok=True)
                         emit("download_restart", path=str(tmp), reason="http_416")
                         existing = 0
@@ -140,7 +147,6 @@ class CivitClient:
                         continue
 
                     if existing > 0 and r.status_code == 200:
-                        # Server ignored Range — rewrite from scratch
                         tmp.unlink(missing_ok=True)
                         mode = "wb"
                         emit("download_restart", path=str(tmp), reason="server_ignored_range")
@@ -148,7 +154,6 @@ class CivitClient:
                     if r.status_code not in (200, 206):
                         r.raise_for_status()
 
-                    # Resolve total size for progress (Content-Length / Range)
                     start_offset = existing if mode == "ab" else 0
                     content_len = r.headers.get("Content-Length")
                     total: int | None = None
@@ -161,7 +166,7 @@ class CivitClient:
                                 total = cl
                         except ValueError:
                             total = None
-                    cr = r.headers.get("Content-Range")  # bytes start-end/total
+                    cr = r.headers.get("Content-Range")
                     if cr and "/" in cr:
                         try:
                             overall = cr.rsplit("/", 1)[-1]
@@ -198,8 +203,9 @@ class CivitClient:
             except (PermissionError, FileNotFoundError):
                 tmp.unlink(missing_ok=True)
                 raise
+            except OriginMismatch:
+                raise
             except Exception:
-                # Keep partial for Range resume on next attempt / run
                 if attempt == max_retries:
                     raise
                 time.sleep(min(2**attempt, 30))

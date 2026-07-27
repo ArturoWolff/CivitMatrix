@@ -35,16 +35,34 @@ const SM_SUBDIRS = {
   Other: "Other",
 };
 
+let uiToken = "";
+
 function setStatus(msg) {
   $("#statusMsg").textContent = msg;
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    ...opts,
-  });
+async function ensureToken() {
+  if (uiToken) return uiToken;
+  const res = await fetch("/api/session", { cache: "no-store" });
   const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) throw new Error(data.error || "UI session unavailable");
+  uiToken = data.token;
+  return uiToken;
+}
+
+async function api(path, opts = {}) {
+  const token = await ensureToken();
+  const headers = {
+    "Content-Type": "application/json",
+    "X-CivitMatrix-Token": token,
+    ...(opts.headers || {}),
+  };
+  const res = await fetch(path, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    uiToken = "";
+    throw new Error(data.error || "UI session expired — reload the page");
+  }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }

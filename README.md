@@ -35,7 +35,7 @@ CivitMatrix:
 3. Downloads weights into your SM Models folder
 4. Writes **SM-native sidecars**: `.cm-info.json` + preview (extension matches real media type)
 5. Skips what you already have; logs failures for later retries
-6. Exposes a **live control plane** (`job.json`, cancel / pause / status) for long runs and a future UI
+6. Opens a **local Win95 batch UI** by default (`127.0.0.1`) and exposes a **live control plane** (`job.json`, cancel / pause / status) for long CLI runs
 
 <p align="center">
   <img src="assets/demo-terminal.svg" alt="Terminal demo" width="92%" />
@@ -82,15 +82,17 @@ LORA_DIR=/path/to/StabilityMatrix/Data/Models/Lora
 
 ```bash
 chmod +x run.sh
-./run.sh --dry-run --limit 5
-./run.sh
+./run.sh                         # opens local Win95 UI on 127.0.0.1:7860
+./run.sh --cli --dry-run --limit 5
+./run.sh --cli                   # headless full batch
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-.\run.ps1 --dry-run --limit 5
-.\run.ps1
+.\run.ps1                        # opens local Win95 UI
+.\run.ps1 --cli --dry-run --limit 5
+.\run.ps1 --cli
 ```
 
 **Any platform (Python module)**
@@ -128,14 +130,14 @@ Examples:
 
 ```bash
 # Showcase: all Anima LoRAs (SFW + NSFW)
-./run.sh --base-model Anima --type LORA
+./run.sh --cli --base-model Anima --type LORA
 
 # Illustrious checkpoints, most downloaded first
-./run.sh --base-model Illustrious --type Checkpoint --sort "Most Downloaded"
+./run.sh --cli --base-model Illustrious --type Checkpoint --sort "Most Downloaded"
 
 # Dry-run + retry later
-./run.sh --dry-run --limit 20
-./run.sh --retry-failed
+./run.sh --cli --dry-run --limit 20
+./run.sh --cli --retry-failed
 ```
 
 ### Control a long run (second terminal)
@@ -150,9 +152,9 @@ No API key needed for these:
 ./run.sh --cancel              # cooperative stop (exit 4); Ctrl+C does the same
 
 # Fix incomplete sidecars / orphans in an existing library
-./run.sh --heal --dry-run
-./run.sh --heal
-./run.sh --heal --purge-orphans
+./run.sh --cli --heal --dry-run
+./run.sh --cli --heal
+./run.sh --cli --heal --purge-orphans
 ```
 
 Full walkthrough: [docs/GUIDE.md](docs/GUIDE.md) · Filters: [docs/FILTERS.md](docs/FILTERS.md)
@@ -205,9 +207,9 @@ Catalog processing is **streamed**: models are submitted to the worker pool as l
 
 ## Roadmap (teaser)
 
-- **Filters** — tags, min downloads, base-only, creators  
+- **Filters (v0.2)** — tags / category / users / format shipped; min downloads, base-only, presets still planned  
 - **Categorizing** — auto-bucket into characters / styles / concepts / clothes  
-- **GUI** — `./run.sh` opens a local Win95-flavored UI (Main / Directories / Logs) on `127.0.0.1`; use `./run.sh --cli` for scripts  
+- **GUI** — shipped: `./run.sh` opens Win95 UI (Main / Directories / Logs); `./run.sh --cli` for scripts  
 - **Deeper SM hooks** — index refresh helpers, update-only mode  
 
 See the full plan: [ROADMAP.md](ROADMAP.md)

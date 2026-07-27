@@ -18,5 +18,18 @@ if (-not (Test-Path ".env")) {
     exit 1
 }
 
-& $venvPython -m civitmatrix @args
+# Default: Win95 UI. Headless: .\run.ps1 --cli …
+if ($args.Count -ge 1 -and $args[0] -eq "--cli") {
+    $rest = @()
+    if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }
+    & $venvPython -m civitmatrix --cli @rest
+    exit $LASTEXITCODE
+}
+
+if ($args.Count -gt 0) {
+    & $venvPython -m civitmatrix --cli @args
+    exit $LASTEXITCODE
+}
+
+& $venvPython -m civitmatrix --ui
 exit $LASTEXITCODE
