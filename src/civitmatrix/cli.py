@@ -74,6 +74,18 @@ CATEGORY_CHOICES = [
     "Vehicle",
 ]
 
+FORMAT_CHOICES = [
+    "All",
+    "SafeTensor",
+    "PickleTensor",
+    "Pt",
+    "GGUF",
+    "ONNX",
+    "Core ML",
+    "Diffusers",
+    "Other",
+]
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)

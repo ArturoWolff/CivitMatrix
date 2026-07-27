@@ -315,6 +315,16 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     }
 
 
+def _tail_ui_run_log(path: Path, *, max_lines: int = 40) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(lines[-max_lines:]).strip()
+
+
 def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
     global _run_proc
     with _run_lock:
@@ -322,7 +332,8 @@ def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
             return {"error": "a run is already active", "pid": _run_proc.pid}
         logs = root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-        run_log = open(logs / "ui-run.log", "a", encoding="utf-8")  # noqa: SIM115
+        run_log_path = logs / "ui-run.log"
+        run_log = open(run_log_path, "a", encoding="utf-8")  # noqa: SIM115
         run_log.write(f"\n--- spawn {' '.join(argv)} ---\n")
         run_log.flush()
         _run_proc = subprocess.Popen(
@@ -332,6 +343,19 @@ def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
             stdout=run_log,
             stderr=subprocess.STDOUT,
         )
+        # Catch immediate CLI crashes (import/argparse) so the UI can show them.
+        time.sleep(0.35)
+        code = _run_proc.poll()
+        if code is not None:
+            pid = _run_proc.pid
+            _run_proc = None
+            tail = _tail_ui_run_log(run_log_path)
+            err = f"run exited immediately (exit {code})"
+            if "Traceback" in tail or "Error" in tail:
+                last = [ln for ln in tail.splitlines() if ln.strip()][-1:]
+                if last:
+                    err = f"{err}: {last[0]}"
+            return {"ok": False, "error": err, "pid": pid, "exitCode": code, "logTail": tail}
         return {"ok": True, "pid": _run_proc.pid, "argv": argv}
 
 
@@ -389,16 +413,53 @@ class Handler(BaseHTTPRequestHandler):
             _json_response(self, 200, {"exitCode": request_cancel_cli(p["logs"], p["job"])})
             return
         if path == "/api/pause":
-            _json_response(self, 200, {"exitCode": request_pause_cli(p["logs"], p["job"])})
+            code = request_pause_cli(p["logs"], p["job"])
+            phase = None
+            try:
+                phase = json.loads(p["job"].read_text(encoding="utf-8")).get("phase")
+            except (OSError, json.JSONDecodeError):
+                pass
+            msg = (
+                f"Pause requested (job was {phase})."
+                if (p["logs"] / "pause.request").exists()
+                else f"Nothing to pause (job phase={phase or '—'})."
+            )
+            _json_response(self, 200, {"exitCode": code, "message": msg})
             return
         if path == "/api/resume":
-            _json_response(self, 200, {"exitCode": request_resume_cli(p["logs"], p["job"])})
+            had_pause = (p["logs"] / "pause.request").exists()
+            code = request_resume_cli(p["logs"], p["job"])
+            phase = None
+            try:
+                phase = json.loads(p["job"].read_text(encoding="utf-8")).get("phase")
+            except (OSError, json.JSONDecodeError):
+                pass
+            msg = (
+                "Resume requested (pause cleared)."
+                if had_pause
+                else f"Nothing to resume (job phase={phase or '—'}; not paused)."
+            )
+            _json_response(self, 200, {"exitCode": code, "message": msg})
             return
         if path == "/api/retry-failed":
+            from civitmatrix.logging_io import RunLogger
+
+            n = len(RunLogger(p["logs"]).load_failed_model_ids())
+            if n <= 0:
+                _json_response(
+                    self,
+                    200,
+                    {
+                        "ok": False,
+                        "error": "No retryable failures in logs/failed.jsonl (nothing to retry).",
+                    },
+                )
+                return
             request_resume_cli(p["logs"], p["job"])
-            _json_response(
-                self, 200, _spawn_run(["--cli", "--retry-failed", "--concurrency", "2"], p["root"])
-            )
+            out = _spawn_run(["--cli", "--retry-failed", "--concurrency", "2"], p["root"])
+            if out.get("ok") is not False:
+                out["message"] = f"Retrying {n} failed model(s)."
+            _json_response(self, 200, out)
             return
         if path == "/api/directories":
             saved = save_directories(p["dirs"], body)

@@ -286,11 +286,13 @@ async function startRun() {
   );
   try {
     const data = await api("/api/run", { method: "POST", body: JSON.stringify(body) });
-    if (data.error) throw new Error(data.error);
+    if (data.error || data.ok === false) throw new Error(data.error || "spawn failed");
     uiRunAlive = true;
     $("#btnStart").disabled = true;
-    setStatus(`Run started (pid ${data.pid}).`);
+    setStatus(`Run started (pid ${data.pid}). Watch Status / Console.`);
   } catch (e) {
+    uiRunAlive = false;
+    $("#btnStart").disabled = false;
     setStatus(`Start failed: ${e.message}`);
   }
 }
@@ -302,7 +304,8 @@ async function controlAction(path, label) {
     if (data.error) throw new Error(data.error);
     const code = data.exitCode != null ? ` exit=${data.exitCode}` : "";
     const pid = data.pid != null ? ` pid=${data.pid}` : "";
-    setStatus(`${label} ok.${code}${pid}`);
+    const msg = data.message ? ` ${data.message}` : "";
+    setStatus(`${label} ok.${code}${pid}${msg}`);
   } catch (e) {
     setStatus(`${label} failed: ${e.message}`);
   }
@@ -312,12 +315,14 @@ async function retryFailedResume() {
   setStatus("Retrying failed (resume partials)…");
   try {
     const data = await api("/api/retry-failed", { method: "POST" });
-    if (data.error) throw new Error(data.error);
+    if (data.error || data.ok === false) throw new Error(data.error || "spawn failed");
     uiRunAlive = true;
     $("#btnStart").disabled = true;
     resetLogTail();
-    setStatus(`Retry+resume started (pid ${data.pid}).`);
+    setStatus(`Retry+resume started (pid ${data.pid}). Watch Status / Console.`);
   } catch (e) {
+    uiRunAlive = false;
+    $("#btnStart").disabled = false;
     setStatus(`Retry failed: ${e.message}`);
   }
 }
