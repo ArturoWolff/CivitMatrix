@@ -61,7 +61,7 @@ flowchart LR
 
 ```bash
 git clone https://github.com/ArturoWolff/CivitMatrix.git
-cd civitmatrix
+cd CivitMatrix
 cp .env.example .env
 ```
 
