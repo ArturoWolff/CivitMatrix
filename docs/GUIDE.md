@@ -228,8 +228,10 @@ CivitMatrix keeps **one version per model**: the newest matching base-model vers
 | View | Purpose |
 |------|---------|
 | **Main** | Filters → **Populate** preview → per-row **latest / pick…** versions → **Start**. “Download all matching filters” = full catalog (ignores preview cap). Uncheck it to download only checked rows + version picks. |
-| **Directories** | Models root + per-type folders (**Browse…**), API key / base URL / disk floor |
-| **Logs** | Job counts, event tail, **Retry failed + resume** |
+| **Directories** | Models root + per-type folders (**Browse…**), API key (masked), base URL, disk floor → Save (atomic `.env`; syncs `LORA_DIR`) |
+| **Logs** | Job counts, retryable failure table, event console, Help; **Retry failed + resume** |
+
+Theme: Win95 (default) or Modern stub (CSS variables). Bound to `127.0.0.1` only.
 
 Headless / scripts:
 

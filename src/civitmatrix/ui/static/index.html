@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="win95">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -20,9 +20,16 @@
       <label><input type="radio" name="view" value="main" checked /> Main</label>
       <label><input type="radio" name="view" value="directories" /> Directories</label>
       <label><input type="radio" name="view" value="logs" /> Logs</label>
+      <span class="nav-spacer"></span>
+      <label class="field theme-field">Theme
+        <select id="fTheme" title="Theme switcher (Win95 default; Modern stub)">
+          <option value="win95" selected>Win95</option>
+          <option value="modern">Modern (stub)</option>
+        </select>
+      </label>
     </div>
     <div class="content">
-      <!-- MAIN -->
+      <!-- MAIN: queue + filters + run -->
       <section id="view-main" class="view active">
         <div class="row">
           <label class="field">Type
@@ -79,12 +86,11 @@
           <button type="button" class="primary" id="btnPopulate">Populate</button>
           <span id="matchInfo" class="muted">matches: 0 · selected: all</span>
           <label class="field">Preview max
-            <input id="fMax" type="number" value="500" min="0" max="50000" style="width:72px" title="0 = no preview cap (slow for huge catalogs). Does NOT limit downloads when Download all is checked." />
+            <input id="fMax" type="number" value="500" min="0" max="50000" style="width:72px" title="0 = no preview cap. Does NOT limit downloads when Download all is checked." />
           </label>
-          <label class="field" title="When checked, Start downloads every model matching filters (full catalog), not just the preview rows. Version picks apply only when this is unchecked.">
+          <label class="field" title="Full catalog matching filters (not limited by preview max). Uncheck to download only checked rows + version picks.">
             <input id="fDownloadAll" type="checkbox" checked /> Download all matching filters
           </label>
-          <span class="hint">Populate = preview/picker. Uncheck “Download all” to use checked rows + version picks (latest or multi).</span>
         </div>
         <div class="list-wrap">
           <table class="models">
@@ -102,6 +108,7 @@
         </div>
         <div class="row panel">
           <strong id="runPhase">Status: IDLE</strong>
+          <span id="runCurrent" class="muted"></span>
           <span id="runCounts" class="muted"></span>
           <div class="progress" title="progress"><span id="progBar"></span></div>
           <button type="button" class="primary" id="btnStart">Start</button>
@@ -112,9 +119,9 @@
         </div>
       </section>
 
-      <!-- DIRECTORIES -->
+      <!-- DIRECTORIES: settings + SM paths -->
       <section id="view-directories" class="view">
-        <p class="hint">Output folders per model type (Stability Matrix layout). Browse opens a native folder dialog.</p>
+        <p class="hint">Output folders (Stability Matrix layout). LORA path is also written to <code>LORA_DIR</code> in <code>.env</code> on Save.</p>
         <div class="row" style="margin-bottom:8px">
           <label class="field">Models root
             <input id="dModelsRoot" type="text" class="wide" placeholder="MODELS_ROOT / ./downloads" />
@@ -125,7 +132,7 @@
         <div class="dir-grid" id="dirGrid"></div>
         <div class="row" style="margin-top:12px">
           <label class="field">API key
-            <input id="dApiKey" type="text" class="wide" placeholder="•••• (leave blank to keep)" autocomplete="off" />
+            <input id="dApiKey" type="password" class="wide" placeholder="•••• (leave blank to keep)" autocomplete="off" />
           </label>
           <label class="field">Base URL
             <input id="dBaseUrl" type="text" class="wide" />
@@ -138,19 +145,44 @@
         <p id="dirMsg" class="muted"></p>
       </section>
 
-      <!-- LOGS -->
+      <!-- LOGS: console + failures + help -->
       <section id="view-logs" class="view">
         <div class="row panel">
           <span id="logJob">Job: —</span>
           <span id="logFails" class="muted">Failures (retryable): 0</span>
           <button type="button" id="btnRetry">Retry failed + resume</button>
+          <button type="button" id="btnClearLog">Clear console</button>
+          <button type="button" id="btnRefreshFails">Refresh failures</button>
+        </div>
+        <div class="fail-wrap">
+          <table class="models fails">
+            <thead>
+              <tr>
+                <th>ModelId</th>
+                <th>Reason</th>
+                <th>Retryable</th>
+                <th>Event</th>
+              </tr>
+            </thead>
+            <tbody id="failBody"></tbody>
+          </table>
         </div>
         <div id="logBox"></div>
+        <details class="help-panel" open>
+          <summary>Help</summary>
+          <div class="help-body">
+            <p><strong>Main</strong> — set filters → Populate (preview) → Start. Keep “Download all matching filters” on for the full catalog; uncheck to use checked rows and version latest/pick.</p>
+            <p><strong>Directories</strong> — set Models root / per-type folders (Browse…), API key, base URL, disk floor → Save (writes <code>.env</code> atomically; key never echoed back).</p>
+            <p><strong>Logs</strong> — live events, retryable failure list, Retry failed + resume.</p>
+            <p><strong>Control</strong> — Pause finishes the current file then waits; Resume continues; Cancel cooperatively stops the run.</p>
+            <p>Bound to <code>127.0.0.1</code> only. Headless: <code>./run.sh --cli …</code>. Docs: <code>docs/GUIDE.md</code>.</p>
+          </div>
+        </details>
       </section>
     </div>
     <div class="statusbar">
       <span id="statusMsg">Ready.</span>
-      <span>127.0.0.1</span>
+      <span id="bindLabel">127.0.0.1</span>
     </div>
   </div>
   <script src="/app.js"></script>

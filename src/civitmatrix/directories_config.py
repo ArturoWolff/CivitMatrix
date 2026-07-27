@@ -67,14 +67,30 @@ def load_directories(path: Path, *, models_root: Path | None = None) -> dict[str
         for k, v in incoming.items():
             if v:
                 paths[str(k)] = str(v)
+    # Never echo secrets from disk JSON (apiKey / tokens / etc.)
+    secret_keys = {
+        "apiKey",
+        "api_key",
+        "CIVITAI_API_KEY",
+        "token",
+        "secret",
+        "password",
+    }
+    safe_extra = {
+        k: v
+        for k, v in data.items()
+        if k != "paths" and k not in secret_keys and not str(k).lower().endswith("key")
+    }
     out = {
         **base,
-        **{k: v for k, v in data.items() if k != "paths"},
+        **safe_extra,
         "paths": paths,
         "apiKeySet": bool(os.environ.get("CIVITAI_API_KEY", "").strip()),
     }
     if not out.get("modelsRoot"):
         out["modelsRoot"] = base["modelsRoot"]
+    # Force boolean only — never return raw key material
+    out.pop("apiKey", None)
     return out
 
 

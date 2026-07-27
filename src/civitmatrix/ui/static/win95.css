@@ -1,4 +1,4 @@
-:root {
+:root, html[data-theme="win95"] {
   --desktop: #008080;
   --face: #c0c0c0;
   --face-light: #ffffff;
@@ -9,6 +9,26 @@
   --title-text: #ffffff;
   --inset: #ffffff;
   --font: "MS Sans Serif", "Segoe UI", Tahoma, sans-serif;
+  --console-bg: #000000;
+  --console-fg: #00ff00;
+  --radius: 0;
+}
+
+/* Theme stub — CSS variables only; not a full redesign */
+html[data-theme="modern"] {
+  --desktop: #1e293b;
+  --face: #e2e8f0;
+  --face-light: #f8fafc;
+  --face-dark: #94a3b8;
+  --face-darker: #475569;
+  --text: #0f172a;
+  --title: #0f766e;
+  --title-text: #f8fafc;
+  --inset: #ffffff;
+  --font: "Segoe UI", system-ui, sans-serif;
+  --console-bg: #0f172a;
+  --console-fg: #5eead4;
+  --radius: 6px;
 }
 
 * { box-sizing: border-box; }
@@ -43,7 +63,7 @@ body {
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  border-radius: 0;
+  border-radius: var(--radius);
 }
 
 .titlebar {
@@ -55,6 +75,11 @@ body {
   justify-content: space-between;
   font-weight: bold;
   user-select: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+html[data-theme="modern"] .titlebar {
+  background: var(--title);
 }
 
 .titlebar .controls button {
@@ -71,7 +96,10 @@ body {
   gap: 12px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--face-dark);
+  align-items: center;
 }
+
+.nav-spacer { flex: 1; }
 
 .nav label {
   display: inline-flex;
@@ -79,6 +107,8 @@ body {
   gap: 4px;
   cursor: pointer;
 }
+
+.theme-field select { min-width: 110px; }
 
 .content {
   flex: 1;
@@ -105,7 +135,7 @@ body {
   gap: 4px;
 }
 
-input[type="text"], input[type="number"], select, textarea {
+input[type="text"], input[type="number"], input[type="password"], select, textarea {
   background: var(--inset);
   border: 2px solid;
   border-color: var(--face-dark) var(--face-light) var(--face-light) var(--face-dark);
@@ -114,7 +144,7 @@ input[type="text"], input[type="number"], select, textarea {
   font-size: 12px;
 }
 
-input[type="text"].wide { min-width: 220px; }
+input[type="text"].wide, input[type="password"].wide { min-width: 220px; }
 input.tag { min-width: 280px; }
 
 button, .btn {
@@ -125,10 +155,16 @@ button, .btn {
   border-color: var(--face-light) var(--face-darker) var(--face-darker) var(--face-light);
   padding: 3px 10px;
   cursor: pointer;
+  border-radius: var(--radius);
 }
 
 button:active {
   border-color: var(--face-darker) var(--face-light) var(--face-light) var(--face-darker);
+}
+
+button:disabled {
+  color: var(--face-dark);
+  cursor: default;
 }
 
 button.primary { font-weight: bold; }
@@ -140,13 +176,15 @@ button.primary { font-weight: bold; }
   padding: 6px;
 }
 
-.list-wrap {
-  flex: 1;
+.list-wrap, .fail-wrap {
   overflow: auto;
   background: var(--inset);
   border: 2px solid;
   border-color: var(--face-dark) var(--face-light) var(--face-light) var(--face-dark);
 }
+
+.list-wrap { flex: 1; }
+.fail-wrap { max-height: 140px; flex: 0 0 auto; }
 
 table.models {
   width: 100%;
@@ -170,6 +208,12 @@ table.models th {
 
 table.models td.name {
   max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table.fails td {
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -202,14 +246,35 @@ table.models td.name {
 #logBox {
   flex: 1;
   overflow: auto;
-  background: #000;
-  color: #0f0;
+  background: var(--console-bg);
+  color: var(--console-fg);
   font-family: "Consolas", "Courier New", monospace;
   font-size: 11px;
   padding: 6px;
   border: 2px solid;
   border-color: var(--face-dark) var(--face-light) var(--face-light) var(--face-dark);
   white-space: pre-wrap;
+  min-height: 80px;
+}
+
+.help-panel {
+  flex: 0 0 auto;
+  border: 2px solid;
+  border-color: var(--face-dark) var(--face-light) var(--face-light) var(--face-dark);
+  padding: 4px 6px;
+  background: var(--face);
+  max-height: 160px;
+  overflow: auto;
+}
+
+.help-panel summary {
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.help-body p {
+  margin: 4px 0;
+  font-size: 11px;
 }
 
 .dir-grid {
@@ -240,3 +305,4 @@ table.models td.name {
 
 .muted { color: #404040; }
 .hint { font-size: 11px; color: #404040; }
+code { font-family: "Consolas", "Courier New", monospace; font-size: 11px; }

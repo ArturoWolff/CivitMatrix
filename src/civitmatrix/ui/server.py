@@ -207,12 +207,17 @@ def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
     with _run_lock:
         if _run_proc is not None and _run_proc.poll() is None:
             return {"error": "a run is already active", "pid": _run_proc.pid}
+        logs = root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        run_log = open(logs / "ui-run.log", "a", encoding="utf-8")  # noqa: SIM115
+        run_log.write(f"\n--- spawn {' '.join(argv)} ---\n")
+        run_log.flush()
         _run_proc = subprocess.Popen(
             [sys.executable, "-m", "civitmatrix", *argv],
             cwd=str(root),
             env=os.environ.copy(),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=run_log,
+            stderr=subprocess.STDOUT,
         )
         return {"ok": True, "pid": _run_proc.pid, "argv": argv}
 
@@ -274,11 +279,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/directories":
             saved = save_directories(p["dirs"], body)
             key = body.get("apiKey")
-            if isinstance(key, str) and key.strip() and not key.strip().startswith("•"):
-                self._write_env_key(
-                    p["root"], key.strip(), body.get("baseUrl"), body.get("diskFloorGib")
-                )
-                saved = load_directories(p["dirs"])
+            key_s = (
+                key.strip()
+                if isinstance(key, str) and key.strip() and not key.strip().startswith("•")
+                else ""
+            )
+            self._write_env_settings(
+                p["root"],
+                api_key=key_s or None,
+                base_url=body.get("baseUrl"),
+                disk_floor=body.get("diskFloorGib"),
+                dirs=saved,
+            )
+            saved = load_directories(p["dirs"])
             _json_response(self, 200, saved)
             return
         if path == "/api/browse-dir":
@@ -288,16 +301,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         _json_response(self, 404, {"error": "not found"})
 
-    def _write_env_key(
-        self, root: Path, api_key: str, base_url: Any, disk_floor: Any
+    def _write_env_settings(
+        self,
+        root: Path,
+        *,
+        api_key: str | None,
+        base_url: Any,
+        disk_floor: Any,
+        dirs: dict[str, Any],
     ) -> None:
         env_path = root / ".env"
         lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-        kv = {"CIVITAI_API_KEY": api_key}
+        kv: dict[str, str] = {}
+        if api_key:
+            kv["CIVITAI_API_KEY"] = api_key
         if base_url:
             kv["CIVITAI_BASE_URL"] = str(base_url).rstrip("/")
-        if disk_floor is not None:
+        if disk_floor is not None and str(disk_floor) != "":
             kv["DISK_FLOOR_GIB"] = str(disk_floor)
+        lora = (dirs.get("paths") or {}).get("LORA")
+        if lora:
+            kv["LORA_DIR"] = str(lora)
+        mroot = dirs.get("modelsRoot")
+        if mroot:
+            kv["MODELS_ROOT"] = str(mroot)
+        if not kv:
+            return
         seen: set[str] = set()
         out: list[str] = []
         for line in lines:
@@ -320,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
         dirs = load_directories(p["dirs"])
         model_type = str(body.get("type") or "LORA")
         out_dir = path_for_type(dirs, model_type)
+        os.environ["LORA_DIR"] = str(out_dir)
         selection = body.get("selection") or []
         download_all = bool(body.get("downloadAll"))
         if download_all:
@@ -353,7 +383,6 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("keepOldVersions"):
             argv.append("--keep-old-versions")
         return _spawn_run(argv, p["root"])
-
     def _api_get(self, path: str, qs: dict[str, list[str]]) -> None:
         p = _paths()
         if path == "/api/status":

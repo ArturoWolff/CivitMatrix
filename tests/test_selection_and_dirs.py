@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,6 +96,38 @@ class DirectoriesConfigTests(unittest.TestCase):
         src = Path(__file__).resolve().parents[1] / "src/civitmatrix/directories_config.py"
         text = src.read_text(encoding="utf-8")
         self.assertNotIn("/run/media/arturo", text)
+
+    def test_load_directories_strips_api_key(self):
+        from civitmatrix.directories_config import load_directories, save_directories
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "directories.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "modelsRoot": str(td),
+                        "paths": {"LORA": f"{td}/Lora"},
+                        "apiKey": "SECRET_LEAK",
+                        "baseUrl": "https://example.test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = load_directories(path)
+            self.assertNotIn("apiKey", loaded)
+            self.assertNotIn("SECRET_LEAK", json.dumps(loaded))
+            saved = save_directories(
+                path,
+                {
+                    "modelsRoot": str(td),
+                    "paths": {"LORA": f"{td}/Lora"},
+                    "apiKey": "SHOULD_NOT_PERSIST",
+                    "baseUrl": "https://example.test",
+                },
+            )
+            disk = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("apiKey", disk)
+            self.assertNotIn("apiKey", saved)
 
     def test_path_for_type_lora(self):
         cfg = {

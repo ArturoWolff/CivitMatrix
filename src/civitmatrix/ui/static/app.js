@@ -4,6 +4,9 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 let models = [];
 let eventCursor = 0;
+let lastPct = 0;
+let uiRunAlive = false;
+const THEME_KEY = "civitmatrix.theme";
 const DIR_KEYS = [
   "LORA",
   "LoCon",
@@ -180,6 +183,18 @@ function collectSelection() {
   return out;
 }
 
+function applyTheme(name) {
+  const theme = name === "modern" ? "modern" : "win95";
+  document.documentElement.setAttribute("data-theme", theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (_) {
+    /* ignore */
+  }
+  const sel = $("#fTheme");
+  if (sel) sel.value = theme;
+}
+
 async function populate() {
   setStatus("Populating…");
   $("#btnPopulate").disabled = true;
@@ -200,7 +215,18 @@ async function populate() {
   }
 }
 
+function resetLogTail() {
+  eventCursor = 0;
+  lastPct = 0;
+  const box = $("#logBox");
+  if (box) box.textContent = "";
+}
+
 async function startRun() {
+  if (uiRunAlive) {
+    setStatus("A run is already active.");
+    return;
+  }
   const downloadAll = $("#fDownloadAll").checked;
   const selection = downloadAll ? [] : collectSelection();
   if (!downloadAll && !selection.length) {
@@ -213,6 +239,7 @@ async function startRun() {
     downloadAll,
     concurrency: 2,
   };
+  resetLogTail();
   setStatus(
     downloadAll
       ? "Starting full-catalog run (all matching filters)…"
@@ -221,18 +248,35 @@ async function startRun() {
   try {
     const data = await api("/api/run", { method: "POST", body: JSON.stringify(body) });
     if (data.error) throw new Error(data.error);
+    uiRunAlive = true;
+    $("#btnStart").disabled = true;
     setStatus(`Run started (pid ${data.pid}).`);
   } catch (e) {
     setStatus(`Start failed: ${e.message}`);
   }
 }
 
-async function retryFailedResume() {
-  setStatus("Clearing pause + retrying failed (resume partials)…");
+async function controlAction(path, label) {
+  setStatus(`${label}…`);
   try {
-    await api("/api/resume", { method: "POST" });
+    const data = await api(path, { method: "POST" });
+    if (data.error) throw new Error(data.error);
+    const code = data.exitCode != null ? ` exit=${data.exitCode}` : "";
+    const pid = data.pid != null ? ` pid=${data.pid}` : "";
+    setStatus(`${label} ok.${code}${pid}`);
+  } catch (e) {
+    setStatus(`${label} failed: ${e.message}`);
+  }
+}
+
+async function retryFailedResume() {
+  setStatus("Retrying failed (resume partials)…");
+  try {
     const data = await api("/api/retry-failed", { method: "POST" });
     if (data.error) throw new Error(data.error);
+    uiRunAlive = true;
+    $("#btnStart").disabled = true;
+    resetLogTail();
     setStatus(`Retry+resume started (pid ${data.pid}).`);
   } catch (e) {
     setStatus(`Retry failed: ${e.message}`);
@@ -251,6 +295,10 @@ async function browseDir(start) {
 
 async function loadDirectories() {
   const data = await api("/api/directories");
+  if (data.apiKey) {
+    // Should never happen — strip client-side if leaked
+    delete data.apiKey;
+  }
   const grid = $("#dirGrid");
   grid.innerHTML = "";
   const paths = data.paths || {};
@@ -298,10 +346,36 @@ async function saveDirectories() {
   const key = $("#dApiKey").value.trim();
   if (key) body.apiKey = key;
   const data = await api("/api/directories", { method: "POST", body: JSON.stringify(body) });
-  $("#dirMsg").textContent = "Saved.";
+  if (data.apiKey) delete data.apiKey;
+  $("#dirMsg").textContent = "Saved (.env updated atomically; LORA_DIR synced).";
   $("#dApiKey").value = "";
   $("#dApiKey").placeholder = data.apiKeySet ? "•••••••• (set)" : "(not set)";
   if (data.modelsRoot) $("#dModelsRoot").value = data.modelsRoot;
+}
+
+async function loadFailures() {
+  try {
+    const data = await api("/api/failures");
+    const rows = data.retryable || [];
+    const body = $("#failBody");
+    body.innerHTML = "";
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="4" class="muted">(no retryable failures)</td></tr>`;
+    } else {
+      for (const row of rows.slice(-50).reverse()) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${escapeHtml(row.modelId)}</td>
+          <td title="${escapeHtml(row.reason || "")}">${escapeHtml(row.reason || "")}</td>
+          <td>${row.retryable === false ? "no" : "yes"}</td>
+          <td>${escapeHtml(row.eventId != null ? row.eventId : "—")}</td>`;
+        body.appendChild(tr);
+      }
+    }
+    $("#logFails").textContent = `Failures (retryable): ${rows.length}`;
+  } catch (e) {
+    $("#logFails").textContent = `Failures: error (${e.message})`;
+  }
 }
 
 async function pollStatus() {
@@ -309,18 +383,37 @@ async function pollStatus() {
     const st = await api("/api/status");
     const job = st.job;
     const phase = job ? job.phase || "—" : "IDLE";
-    $("#runPhase").textContent = `Status: ${String(phase).toUpperCase()}`;
+    const phaseUp = String(phase).toUpperCase();
+    $("#runPhase").textContent = `Status: ${phaseUp}`;
     const counts = (job && job.counts) || {};
     $("#runCounts").textContent = Object.keys(counts)
       .map((k) => `${k}=${counts[k]}`)
       .join("  ");
     const cur = job && job.current;
-    const pct = cur && cur.pct != null ? Number(cur.pct) : 0;
-    $("#progBar").style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    if (cur && (cur.modelName || cur.modelId != null)) {
+      const name = cur.modelName || `model ${cur.modelId}`;
+      $("#runCurrent").textContent = name;
+    } else if (phaseUp === "DONE" || phaseUp === "CANCELLED" || phaseUp === "ERROR") {
+      $("#runCurrent").textContent = "";
+    }
+    let pct = cur && cur.pct != null ? Number(cur.pct) : null;
+    if (pct == null) {
+      if (phaseUp === "DONE") pct = 100;
+      else if (phaseUp === "RUNNING" || phaseUp === "PAUSED") pct = lastPct;
+      else pct = lastPct;
+    } else {
+      lastPct = pct;
+    }
+    if (phaseUp === "DONE") lastPct = 100;
+    $("#progBar").style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
     $("#logJob").textContent = job
       ? `Job: phase=${phase} listed=${counts.listed || 0} ok=${counts.ok || 0} skip_hash=${counts.skip_hash || 0} forbidden=${counts.forbidden || 0}`
       : "Job: —";
-    $("#logFails").textContent = `Failures (retryable): ${st.retryableFailures || 0}`;
+    uiRunAlive = !!st.uiRunAlive;
+    $("#btnStart").disabled = uiRunAlive;
+    if (st.retryableFailures != null) {
+      $("#logFails").textContent = `Failures (retryable): ${st.retryableFailures}`;
+    }
   } catch (_) {
     /* ignore */
   }
@@ -333,11 +426,23 @@ async function pollEvents() {
     for (const line of data.lines || []) {
       const ev = line.event || line.type || "event";
       const mid = line.modelId != null ? ` model=${line.modelId}` : "";
-      const extra = line.reason ? ` ${line.reason}` : line.localStem ? ` ${line.localStem}` : "";
-      box.textContent += `[${line.ts || ""}] ${ev}${mid}${extra}\n`;
+      const name = line.modelName ? ` ${line.modelName}` : "";
+      const extra = line.reason
+        ? ` ${line.reason}`
+        : line.localStem
+          ? ` ${line.localStem}`
+          : line.pct != null
+            ? ` ${line.pct}%`
+            : "";
+      box.textContent += `[${line.ts || ""}] ${ev}${mid}${name}${extra}\n`;
     }
     if ((data.lines || []).length) {
       box.scrollTop = box.scrollHeight;
+      // Cap console growth
+      const lines = box.textContent.split("\n");
+      if (lines.length > 2000) {
+        box.textContent = lines.slice(-1500).join("\n");
+      }
     }
     eventCursor = data.next || eventCursor;
   } catch (_) {
@@ -351,19 +456,33 @@ function wireNav() {
       $$(".view").forEach((v) => v.classList.remove("active"));
       $(`#view-${r.value}`).classList.add("active");
       if (r.value === "directories") loadDirectories().catch((e) => setStatus(e.message));
+      if (r.value === "logs") loadFailures().catch((e) => setStatus(e.message));
     });
   });
 }
 
 function wire() {
   wireNav();
+  try {
+    applyTheme(localStorage.getItem(THEME_KEY) || "win95");
+  } catch (_) {
+    applyTheme("win95");
+  }
+  $("#fTheme").addEventListener("change", (e) => applyTheme(e.target.value));
   $("#btnPopulate").addEventListener("click", populate);
   $("#btnStart").addEventListener("click", startRun);
-  $("#btnPause").addEventListener("click", () => api("/api/pause", { method: "POST" }));
-  $("#btnResume").addEventListener("click", () => api("/api/resume", { method: "POST" }));
-  $("#btnCancel").addEventListener("click", () => api("/api/cancel", { method: "POST" }));
+  $("#btnPause").addEventListener("click", () => controlAction("/api/pause", "Pause"));
+  $("#btnResume").addEventListener("click", () => controlAction("/api/resume", "Resume"));
+  $("#btnCancel").addEventListener("click", () => controlAction("/api/cancel", "Cancel"));
   $("#btnRetry").addEventListener("click", retryFailedResume);
   $("#btnRetryResume").addEventListener("click", retryFailedResume);
+  $("#btnClearLog").addEventListener("click", () => {
+    resetLogTail();
+    setStatus("Console cleared.");
+  });
+  $("#btnRefreshFails").addEventListener("click", () =>
+    loadFailures().then(() => setStatus("Failures refreshed.")).catch((e) => setStatus(e.message))
+  );
   $("#btnSaveDirs").addEventListener("click", () =>
     saveDirectories().catch((e) => {
       $("#dirMsg").textContent = e.message;
