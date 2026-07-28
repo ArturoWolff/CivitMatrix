@@ -265,6 +265,12 @@ def heal_library(
         if not incomplete and not refreshing:
             bump("heal_ok")
             continue
+        # Resume-friendly: skip complete installs already refreshed this way
+        if refreshing and cm and cm.get("SourceUrl"):
+            swarm_path = out_dir / f"{stem}.swarm.json"
+            if (not write_swarm) or swarm_path.is_file():
+                bump("heal_sidecars_fresh")
+                continue
 
         try:
             local_hash = file_blake3_hex(weight)

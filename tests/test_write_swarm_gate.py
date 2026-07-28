@@ -185,8 +185,28 @@ class TestHealRefreshSidecars(unittest.TestCase):
             )
             self.assertTrue((out / "x.swarm.json").is_file())
 
-            # refresh with swarm off must not delete existing swarm
+            # already refreshed → skip without API (resume-friendly)
+            client.reset_mock()
+            client.base_url = "https://civitai.red"
             counts2 = heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+                refresh_sidecars=True,
+                write_swarm=True,
+            )
+            self.assertEqual(counts2.get("heal_sidecars_fresh"), 1)
+            client.get_json.assert_not_called()
+            self.assertTrue((out / "x.swarm.json").is_file())
+
+            # write_swarm off does not delete existing swarm when forcing another rewrite
+            cm["SourceUrl"] = None
+            (out / "x.cm-info.json").write_text(json.dumps(cm), encoding="utf-8")
+            client.get_json.return_value = version
+            client.get_model.return_value = model
+            counts3 = heal_library(
                 client=client,
                 out_dir=out,
                 build_cm_info=build_cm_info,
@@ -195,7 +215,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 refresh_sidecars=True,
                 write_swarm=False,
             )
-            self.assertEqual(counts2.get("heal_sidecars_refreshed"), 1)
+            self.assertEqual(counts3.get("heal_sidecars_refreshed"), 1)
             self.assertTrue((out / "x.swarm.json").is_file())
 
 
