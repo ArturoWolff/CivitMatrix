@@ -491,21 +491,27 @@ def _redownload_version(
     weight_path = out_dir / f"{stem}.safetensors"
     if dry_run:
         return True
+    # Download beside the existing weight; only replace after BLAKE3 verify.
+    staging = out_dir / f"{stem}.safetensors.heal-new"
+    staging.unlink(missing_ok=True)
     try:
-        client.download(download_url, weight_path)
+        client.download(download_url, staging)
     except Exception as e:
         log(f"HEAL redownload failed stem={stem}: {e}")
-        weight_path.unlink(missing_ok=True)
+        staging.unlink(missing_ok=True)
+        # Never delete the existing weight because a redownload failed.
         return False
 
     remote_h = remote_blake3_from_file_info(file_info)
     v_status, local_hash, v_reason = verify_weight_blake3(
-        weight_path, remote_h, skip=False
+        staging, remote_h, skip=False
     )
     if v_status == "fail":
         log(f"HEAL verify fail stem={stem} reason={v_reason}")
-        weight_path.unlink(missing_ok=True)
+        staging.unlink(missing_ok=True)
         return False
+
+    staging.replace(weight_path)
 
     model_id = version.get("modelId")
     if model_id is not None:

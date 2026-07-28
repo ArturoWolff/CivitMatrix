@@ -16,6 +16,7 @@ DownloadEventFn = Callable[[str, dict[str, Any]], None]
 class CivitClient:
     def __init__(self, base_url: str, api_key: str, timeout: int = 120) -> None:
         self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
         self.timeout = timeout
         ua = f"civitmatrix/{__version__}"
         # API session carries Bearer for list/metadata only.
@@ -27,8 +28,26 @@ class CivitClient:
             }
         )
         # Download session never sends Authorization (CDN / third-party hosts).
+        # Same-origin download URLs get ``?token=`` instead (see ``_download_url``).
         self.download_session = requests.Session()
         self.download_session.headers.update({"User-Agent": ua})
+
+    def _download_url(self, url: str) -> str:
+        """Attach API token for same-origin download endpoints only (not CDN)."""
+        from urllib.parse import parse_qs, urlparse, urlencode, urlunparse
+
+        try:
+            assert_same_origin(url, self.base_url)
+        except OriginMismatch:
+            return url
+        if not self.api_key:
+            return url
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if "token" in qs:
+            return url
+        qs["token"] = [self.api_key]
+        return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
     def get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         r = self.session.get(url, params=params, timeout=self.timeout)
@@ -111,9 +130,11 @@ class CivitClient:
         When resume=True and a partial exists, send HTTP Range and append on 206.
         Network errors keep the partial for a later retry; auth/404 clear it.
         Uses a session without Authorization so redirects cannot leak the API key.
+        Same-origin ``/api/download/...`` URLs receive ``?token=`` instead.
         """
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".partial")
+        url = self._download_url(url)
 
         def emit(event: str, **fields: Any) -> None:
             if on_event:
