@@ -270,8 +270,9 @@ What it does:
    (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
 3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3; sets `SourceUrl` when ids are known); writes `.swarm.json` only with `--write-swarm`; fetches a preview when missing
 4. With `--refresh-sidecars`, also re-fetches and rewrites complete installs that already have ModelId/VersionId
-5. Deletes empty/corrupt weights; re-downloads when a VersionId is known
-6. Orphan sidecars (no weight): re-download if VersionId known, else report — or delete with `--purge-orphans`
+5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): re-download + verify — never “trust local”
+6. Deletes empty/corrupt weights; re-downloads when a VersionId is known
+7. Orphan sidecars (no weight): re-download if VersionId known, else report — or delete with `--purge-orphans`
 
 Normal batch runs also print a richer index line, e.g.  
 `Local index: 7156 blake3, 7162 versions, 7163 stems (missingBlake3=7, orphanInfo=2)`.
