@@ -185,9 +185,11 @@ class TestHealRefreshSidecars(unittest.TestCase):
             )
             self.assertTrue((out / "x.swarm.json").is_file())
 
-            # already refreshed → skip without API (resume-friendly)
+            # already refreshed + remote hash matches → skip rewrite (still hits API)
             client.reset_mock()
             client.base_url = "https://civitai.red"
+            client.get_json.return_value = version
+            client.get_model.return_value = model
             counts2 = heal_library(
                 client=client,
                 out_dir=out,
@@ -198,7 +200,6 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 write_swarm=True,
             )
             self.assertEqual(counts2.get("heal_sidecars_fresh"), 1)
-            client.get_json.assert_not_called()
             self.assertTrue((out / "x.swarm.json").is_file())
 
             # write_swarm off does not delete existing swarm when forcing another rewrite
@@ -216,6 +217,78 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 write_swarm=False,
             )
             self.assertEqual(counts3.get("heal_sidecars_refreshed"), 1)
+            self.assertTrue((out / "x.swarm.json").is_file())
+
+    def test_hash_mismatch_redownloads(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            weight = out / "x.safetensors"
+            weight.write_bytes(b"wrong-local-bytes")
+            (out / "x.cm-info.json").write_text(
+                json.dumps(
+                    {
+                        "ModelId": 10,
+                        "VersionId": 20,
+                        "Hashes": {"BLAKE3": "AA" * 32},
+                        "SourceUrl": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            from civitmatrix.hash_blake3 import file_blake3_hex
+
+            good = b"correct-remote-weight-bytes!!"
+            tmp = Path(td) / "good.bin"
+            tmp.write_bytes(good)
+            good_hash = file_blake3_hex(tmp)
+
+            version = {
+                "id": 20,
+                "modelId": 10,
+                "name": "V",
+                "trainedWords": [],
+                "files": [
+                    {
+                        "name": "x.safetensors",
+                        "primary": True,
+                        "downloadUrl": "https://civitai.red/download/x",
+                        "hashes": {"BLAKE3": good_hash},
+                        "metadata": {"format": "SafeTensor"},
+                    }
+                ],
+                "images": [],
+                "model": {
+                    "id": 10,
+                    "name": "M",
+                    "tags": [],
+                    "creator": {},
+                    "type": "LORA",
+                },
+            }
+
+            def fake_download(url: str, dest: Path, **_kw: object) -> None:
+                dest.write_bytes(good)
+
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_json.return_value = version
+            client.get_model.return_value = version["model"]
+            client.download.side_effect = fake_download
+
+            counts = heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+                refresh_sidecars=True,
+                write_swarm=True,
+            )
+            self.assertEqual(counts.get("heal_hash_mismatch"), 1)
+            self.assertEqual(counts.get("heal_redownloaded"), 1)
+            self.assertEqual(file_blake3_hex(weight), good_hash)
+            cm = json.loads((out / "x.cm-info.json").read_text(encoding="utf-8"))
+            self.assertEqual(cm["Hashes"]["BLAKE3"], good_hash)
             self.assertTrue((out / "x.swarm.json").is_file())
 
 

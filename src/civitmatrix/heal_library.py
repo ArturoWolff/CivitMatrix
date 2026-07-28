@@ -265,12 +265,6 @@ def heal_library(
         if not incomplete and not refreshing:
             bump("heal_ok")
             continue
-        # Resume-friendly: skip complete installs already refreshed this way
-        if refreshing and cm and cm.get("SourceUrl"):
-            swarm_path = out_dir / f"{stem}.swarm.json"
-            if (not write_swarm) or swarm_path.is_file():
-                bump("heal_sidecars_fresh")
-                continue
 
         try:
             local_hash = file_blake3_hex(weight)
@@ -280,9 +274,37 @@ def heal_library(
             continue
 
         recorded = ((cm or {}).get("Hashes") or {}).get("BLAKE3")
-        if recorded and str(recorded).upper() != local_hash:
-            log(f"HEAL hash mismatch stem={stem} — trusting local file")
+        if recorded and str(recorded).upper() != str(local_hash).upper():
+            version_id = cm.get("VersionId") if cm else None
+            log(f"HEAL hash mismatch stem={stem} — re-downloading to fix")
             bump("heal_hash_mismatch")
+            if job:
+                job.emit(
+                    "heal_hash_mismatch",
+                    stem=stem,
+                    recorded=str(recorded).upper(),
+                    local=str(local_hash).upper(),
+                )
+            if not version_id:
+                bump("heal_hash_mismatch_unresolved")
+                continue
+            if dry_run:
+                bump("heal_would_redownload")
+                continue
+            if _redownload_version(
+                client,
+                out_dir,
+                stem,
+                int(version_id),
+                build_cm_info=build_cm_info,
+                log=log,
+                dry_run=dry_run,
+                write_swarm=write_swarm,
+            ):
+                bump("heal_redownloaded")
+            else:
+                bump("heal_redownload_failed")
+            continue
 
         version: dict[str, Any] | None = None
         if refreshing and cm and cm.get("VersionId") is not None:
@@ -320,6 +342,42 @@ def heal_library(
         if file_info is None:
             bump("heal_unresolved")
             continue
+
+        remote_h = remote_blake3_from_file_info(file_info)
+        if remote_h and str(remote_h).upper() != str(local_hash).upper():
+            version_id = version.get("id") or (cm or {}).get("VersionId")
+            log(
+                f"HEAL remote BLAKE3 mismatch stem={stem} — re-downloading to fix"
+            )
+            bump("heal_hash_mismatch")
+            if not version_id:
+                bump("heal_hash_mismatch_unresolved")
+                continue
+            if dry_run:
+                bump("heal_would_redownload")
+                continue
+            if _redownload_version(
+                client,
+                out_dir,
+                stem,
+                int(version_id),
+                build_cm_info=build_cm_info,
+                log=log,
+                dry_run=dry_run,
+                write_swarm=write_swarm,
+            ):
+                bump("heal_redownloaded")
+            else:
+                bump("heal_redownload_failed")
+            continue
+
+        # Sidecars already good and weight matches remote — nothing to rewrite
+        if refreshing and cm and cm.get("SourceUrl"):
+            swarm_path = out_dir / f"{stem}.swarm.json"
+            if (not write_swarm) or swarm_path.is_file():
+                bump("heal_sidecars_fresh")
+                time.sleep(0.1)
+                continue
 
         model_id = version.get("modelId") or (cm or {}).get("ModelId")
         model: dict[str, Any] | None = None
