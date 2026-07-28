@@ -13,9 +13,7 @@ from civitmatrix.preview_media import finalize_preview_file, find_preview_path, 
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
 
 LogFn = Callable[[str], None]
-BuildCmFn = Callable[
-    [dict[str, Any], dict[str, Any], dict[str, Any], str, Path], dict[str, Any]
-]
+BuildCmFn = Callable[..., dict[str, Any]]
 
 
 def _sidecar_incomplete(cm: dict[str, Any] | None) -> bool:
@@ -68,6 +66,31 @@ def _write_sidecar(path: Path, payload: dict[str, Any], *, dry_run: bool) -> Non
     if dry_run:
         return
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_cm_and_swarm(
+    out_dir: Path,
+    stem: str,
+    model: dict[str, Any],
+    version: dict[str, Any],
+    file_info: dict[str, Any],
+    *,
+    build_cm_info: BuildCmFn,
+    base_url: str,
+    preview: Path | None,
+    dry_run: bool,
+) -> None:
+    from civitmatrix.sm_sidecars import build_swarm_json
+
+    payload = build_cm_info(
+        model, version, file_info, stem, out_dir, base_url=base_url
+    )
+    if preview is not None:
+        payload["ThumbnailImageUrl"] = str(preview)
+    _write_sidecar(out_dir / f"{stem}.cm-info.json", payload, dry_run=dry_run)
+    swarm = build_swarm_json(model, version, base_url=base_url)
+    if swarm is not None:
+        _write_sidecar(out_dir / f"{stem}.swarm.json", swarm, dry_run=dry_run)
 
 
 def _ensure_preview(
@@ -285,11 +308,17 @@ def heal_library(
             client, version, out_dir, stem, dry_run=dry_run, log=log
         )
         try:
-            payload = build_cm_info(model, version, file_info, stem, out_dir)
-            if preview is not None:
-                payload["ThumbnailImageUrl"] = str(preview)
-            info_out = out_dir / f"{stem}.cm-info.json"
-            _write_sidecar(info_out, payload, dry_run=dry_run)
+            _write_cm_and_swarm(
+                out_dir,
+                stem,
+                model,
+                version,
+                file_info,
+                build_cm_info=build_cm_info,
+                base_url=client.base_url,
+                preview=preview,
+                dry_run=dry_run,
+            )
         except Exception as e:
             log(f"HEAL sidecar write failed stem={stem} (keeping weight): {e!r}")
             bump("heal_sidecar_failed")
@@ -388,11 +417,16 @@ def _redownload_version(
 
     preview = _ensure_preview(client, version, out_dir, stem, dry_run=False, log=log)
     try:
-        payload = build_cm_info(model, version, file_info, stem, out_dir)
-        if preview is not None:
-            payload["ThumbnailImageUrl"] = str(preview)
-        (out_dir / f"{stem}.cm-info.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        _write_cm_and_swarm(
+            out_dir,
+            stem,
+            model,
+            version,
+            file_info,
+            build_cm_info=build_cm_info,
+            base_url=client.base_url,
+            preview=preview,
+            dry_run=False,
         )
     except Exception as e:
         # Weight already verified — never delete it because sidecar write failed.
