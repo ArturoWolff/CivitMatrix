@@ -147,6 +147,7 @@ def process_one(
     disk_floor_bytes: int = 0,
     keep_old_versions: bool = False,
     force_version: dict[str, Any] | None = None,
+    write_swarm: bool = False,
 ) -> str:
     version = force_version or pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -448,12 +449,13 @@ def process_one(
         info_path.write_text(
             json.dumps(cm, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        swarm = build_swarm_json(model, version, base_url=client.base_url)
-        if swarm is not None:
-            swarm_path = out_dir / f"{stem}.swarm.json"
-            swarm_path.write_text(
-                json.dumps(swarm, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+        if write_swarm:
+            swarm = build_swarm_json(model, version, base_url=client.base_url)
+            if swarm is not None:
+                swarm_path = out_dir / f"{stem}.swarm.json"
+                swarm_path.write_text(
+                    json.dumps(swarm, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
 
         logger.append_jsonl(
             logger.manifest_path,

@@ -79,6 +79,7 @@ def _write_cm_and_swarm(
     base_url: str,
     preview: Path | None,
     dry_run: bool,
+    write_swarm: bool = False,
 ) -> None:
     from civitmatrix.sm_sidecars import build_swarm_json
 
@@ -88,6 +89,8 @@ def _write_cm_and_swarm(
     if preview is not None:
         payload["ThumbnailImageUrl"] = str(preview)
     _write_sidecar(out_dir / f"{stem}.cm-info.json", payload, dry_run=dry_run)
+    if not write_swarm:
+        return
     swarm = build_swarm_json(model, version, base_url=base_url)
     if swarm is not None:
         _write_sidecar(out_dir / f"{stem}.swarm.json", swarm, dry_run=dry_run)
@@ -144,6 +147,8 @@ def heal_library(
     job: Any | None = None,
     dry_run: bool = False,
     purge_orphans: bool = False,
+    refresh_sidecars: bool = False,
+    write_swarm: bool = False,
     cancel_check: Callable[[], bool] | None = None,
     pause_wait: Callable[[], bool] | None = None,
 ) -> dict[str, int]:
@@ -155,6 +160,8 @@ def heal_library(
             "heal_start",
             dryRun=dry_run,
             purgeOrphans=purge_orphans,
+            refreshSidecars=refresh_sidecars,
+            writeSwarm=write_swarm,
             diagnostics={
                 k: (len(v) if isinstance(v, list) else v) for k, v in diag.items()
             },
@@ -208,6 +215,7 @@ def heal_library(
                         build_cm_info=build_cm_info,
                         log=log,
                         dry_run=dry_run,
+                        write_swarm=write_swarm,
                     ):
                         bump("heal_redownloaded")
                 continue
@@ -232,7 +240,8 @@ def heal_library(
                     int(version_id),
                     build_cm_info=build_cm_info,
                     log=log,
-                    dry_run=False,
+                    dry_run=dry_run,
+                    write_swarm=write_swarm,
                 ):
                     bump("heal_redownloaded")
                 else:
@@ -245,7 +254,15 @@ def heal_library(
             continue
 
         assert weight is not None
-        if not _sidecar_incomplete(cm):
+        incomplete = _sidecar_incomplete(cm)
+        refreshing = bool(
+            refresh_sidecars
+            and not incomplete
+            and cm
+            and cm.get("ModelId") is not None
+            and cm.get("VersionId") is not None
+        )
+        if not incomplete and not refreshing:
             bump("heal_ok")
             continue
 
@@ -262,10 +279,19 @@ def heal_library(
             bump("heal_hash_mismatch")
 
         version: dict[str, Any] | None = None
-        try:
-            version = client.get_version_by_hash(local_hash)
-        except Exception as e:
-            log(f"HEAL by-hash error stem={stem}: {e}")
+        if refreshing and cm and cm.get("VersionId") is not None:
+            try:
+                version = client.get_json(
+                    f"{client.base_url}/api/v1/model-versions/{int(cm['VersionId'])}"
+                )
+                time.sleep(0.15)
+            except Exception as e:
+                log(f"HEAL refresh version fetch failed stem={stem}: {e}")
+        if version is None:
+            try:
+                version = client.get_version_by_hash(local_hash)
+            except Exception as e:
+                log(f"HEAL by-hash error stem={stem}: {e}")
 
         if version is None and cm and cm.get("VersionId") is not None:
             try:
@@ -319,25 +345,44 @@ def heal_library(
                 base_url=client.base_url,
                 preview=preview,
                 dry_run=dry_run,
+                write_swarm=write_swarm,
             )
         except Exception as e:
             log(f"HEAL sidecar write failed stem={stem} (keeping weight): {e!r}")
             bump("heal_sidecar_failed")
             continue
-        log(
-            f"HEAL repaired stem={stem} model={model.get('id')} ver={version.get('id')}"
-            + (" (dry-run)" if dry_run else "")
-        )
-        bump("heal_repaired")
-        if job:
-            job.emit(
-                "heal_repaired",
-                stem=stem,
-                modelId=model.get("id"),
-                versionId=version.get("id"),
-                blake3=local_hash,
-                dryRun=dry_run,
+        if refreshing:
+            log(
+                f"HEAL refreshed sidecars stem={stem} model={model.get('id')} "
+                f"ver={version.get('id')}"
+                + (" (dry-run)" if dry_run else "")
             )
+            bump("heal_sidecars_refreshed")
+            if job:
+                job.emit(
+                    "heal_sidecars_refreshed",
+                    stem=stem,
+                    modelId=model.get("id"),
+                    versionId=version.get("id"),
+                    blake3=local_hash,
+                    writeSwarm=write_swarm,
+                    dryRun=dry_run,
+                )
+        else:
+            log(
+                f"HEAL repaired stem={stem} model={model.get('id')} ver={version.get('id')}"
+                + (" (dry-run)" if dry_run else "")
+            )
+            bump("heal_repaired")
+            if job:
+                job.emit(
+                    "heal_repaired",
+                    stem=stem,
+                    modelId=model.get("id"),
+                    versionId=version.get("id"),
+                    blake3=local_hash,
+                    dryRun=dry_run,
+                )
         time.sleep(0.1)
 
     if job:
@@ -354,6 +399,7 @@ def _redownload_version(
     build_cm_info: BuildCmFn,
     log: LogFn,
     dry_run: bool,
+    write_swarm: bool = False,
 ) -> bool:
     try:
         version = client.get_json(f"{client.base_url}/api/v1/model-versions/{version_id}")
@@ -428,6 +474,7 @@ def _redownload_version(
             base_url=client.base_url,
             preview=preview,
             dry_run=False,
+            write_swarm=write_swarm,
         )
     except Exception as e:
         # Weight already verified — never delete it because sidecar write failed.

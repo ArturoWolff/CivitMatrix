@@ -198,6 +198,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="One-shot: remove modelspec.thumbnail from existing *.swarm.json under out dir",
     )
     p.add_argument(
+        "--write-swarm",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Write SwarmUI *.swarm.json beside weights "
+            "(default: env WRITE_SWARM or false)"
+        ),
+    )
+    p.add_argument(
+        "--refresh-sidecars",
+        action="store_true",
+        help=(
+            "With --heal: re-fetch API metadata and rewrite .cm-info.json "
+            "(and .swarm.json if --write-swarm) for complete installs"
+        ),
+    )
+    p.add_argument(
         "--json",
         action="store_true",
         help="With --status, print JSON instead of a human summary",
@@ -428,6 +445,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.skip_verify is not None
         else _env_bool("SKIP_VERIFY", False)
     )
+    write_swarm = (
+        args.write_swarm
+        if args.write_swarm is not None
+        else _env_bool("WRITE_SWARM", False)
+    )
     if args.disk_floor_gib is not None:
         disk_floor_gib = float(args.disk_floor_gib)
     else:
@@ -445,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             purge_orphans=bool(args.purge_orphans),
             keep_partials=keep_partials,
+            refresh_sidecars=bool(args.refresh_sidecars),
+            write_swarm=write_swarm,
         )
     return run_batch(
         client=client,
@@ -475,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
         updated_from=updated_from,
         updated_to=updated_to,
         selection_map=selection_map,
+        write_swarm=write_swarm,
     )
 
 

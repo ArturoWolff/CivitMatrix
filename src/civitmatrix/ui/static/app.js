@@ -277,6 +277,7 @@ async function startRun() {
     selection,
     downloadAll,
     concurrency: 2,
+    writeSwarm: $("#fWriteSwarm").checked,
   };
   resetLogTail();
   setStatus(
@@ -314,7 +315,10 @@ async function controlAction(path, label) {
 async function retryFailedResume() {
   setStatus("Retrying failed (resume partials)…");
   try {
-    const data = await api("/api/retry-failed", { method: "POST" });
+    const data = await api("/api/retry-failed", {
+      method: "POST",
+      body: JSON.stringify({ writeSwarm: $("#fWriteSwarm").checked }),
+    });
     if (data.error || data.ok === false) throw new Error(data.error || "spawn failed");
     uiRunAlive = true;
     $("#btnStart").disabled = true;
@@ -324,6 +328,35 @@ async function retryFailedResume() {
     uiRunAlive = false;
     $("#btnStart").disabled = false;
     setStatus(`Retry failed: ${e.message}`);
+  }
+}
+
+async function healLibrary() {
+  if (uiRunAlive) {
+    setStatus("A run is already active.");
+    return;
+  }
+  const refreshSidecars = $("#fRefreshSidecars").checked;
+  const writeSwarm = $("#fWriteSwarm").checked;
+  setStatus(
+    refreshSidecars
+      ? "Starting heal with sidecar refresh (API re-fetch)…"
+      : "Starting heal (incomplete sidecars only)…"
+  );
+  try {
+    const data = await api("/api/heal", {
+      method: "POST",
+      body: JSON.stringify({ refreshSidecars, writeSwarm }),
+    });
+    if (data.error || data.ok === false) throw new Error(data.error || "spawn failed");
+    uiRunAlive = true;
+    $("#btnStart").disabled = true;
+    resetLogTail();
+    setStatus(`Heal started (pid ${data.pid}). Watch Status / Console.`);
+  } catch (e) {
+    uiRunAlive = false;
+    $("#btnStart").disabled = false;
+    setStatus(`Heal failed: ${e.message}`);
   }
 }
 
@@ -551,6 +584,7 @@ function wire() {
   $("#btnCancel").addEventListener("click", () => controlAction("/api/cancel", "Cancel"));
   $("#btnRetry").addEventListener("click", retryFailedResume);
   $("#btnRetryResume").addEventListener("click", retryFailedResume);
+  $("#btnHeal").addEventListener("click", healLibrary);
   $("#btnClearLog").addEventListener("click", () => {
     resetLogTail();
     setStatus("Console cleared.");

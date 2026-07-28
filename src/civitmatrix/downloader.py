@@ -74,6 +74,7 @@ def run_batch(
     updated_from: str = "",
     updated_to: str = "",
     selection_map: dict[int, list] | None = None,
+    write_swarm: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -98,6 +99,7 @@ def run_batch(
         refreshListing=bool(refresh_listing),
         listingCacheHit=False,
         diskFloorGib=float(disk_floor_gib),
+        writeSwarm=bool(write_swarm),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -272,6 +274,7 @@ def run_batch(
                     disk_floor_bytes=disk_floor_bytes,
                     keep_old_versions=keep_old_versions or multi,
                     force_version=ver,
+                    write_swarm=write_swarm,
                 )
                 if last in {"cancelled", "disk_full"}:
                     return last
@@ -595,6 +598,8 @@ def run_heal(
     dry_run: bool,
     purge_orphans: bool,
     keep_partials: bool = False,
+    refresh_sidecars: bool = False,
+    write_swarm: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -604,7 +609,13 @@ def run_heal(
     pause.clear()
 
     job = JobState(logger.job_path)
-    job.set_meta(dryRun=bool(dry_run), outDir=str(out_dir), mode="heal")
+    job.set_meta(
+        dryRun=bool(dry_run),
+        outDir=str(out_dir),
+        mode="heal",
+        refreshSidecars=bool(refresh_sidecars),
+        writeSwarm=bool(write_swarm),
+    )
     cancel.install_sigint(lambda: job.run_id)
 
     def _pause_hooks(resume_phase: str) -> tuple[Any, Any]:
@@ -673,6 +684,8 @@ def run_heal(
             job=job,
             dry_run=dry_run,
             purge_orphans=purge_orphans,
+            refresh_sidecars=refresh_sidecars,
+            write_swarm=write_swarm,
             cancel_check=_cancel,
             pause_wait=_pause,
         )

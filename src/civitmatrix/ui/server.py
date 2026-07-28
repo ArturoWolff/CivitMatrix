@@ -41,6 +41,7 @@ MUTATING_POST = {
     "/api/pause",
     "/api/resume",
     "/api/retry-failed",
+    "/api/heal",
     "/api/directories",
     "/api/browse-dir",
 }
@@ -456,10 +457,17 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             request_resume_cli(p["logs"], p["job"])
-            out = _spawn_run(["--cli", "--retry-failed", "--concurrency", "2"], p["root"])
+            argv = ["--cli", "--retry-failed", "--concurrency", "2"]
+            if isinstance(body, dict) and body.get("writeSwarm"):
+                argv.append("--write-swarm")
+            out = _spawn_run(argv, p["root"])
             if out.get("ok") is not False:
                 out["message"] = f"Retrying {n} failed model(s)."
             _json_response(self, 200, out)
+            return
+        if path == "/api/heal":
+            out = self._start_heal(body if isinstance(body, dict) else {}, p)
+            _json_response(self, 200 if out.get("ok") else 409, out)
             return
         if path == "/api/directories":
             saved = save_directories(p["dirs"], body)
@@ -570,6 +578,24 @@ class Handler(BaseHTTPRequestHandler):
             argv.append("--dry-run")
         if body.get("keepOldVersions"):
             argv.append("--keep-old-versions")
+        if body.get("writeSwarm"):
+            argv.append("--write-swarm")
+        return _spawn_run(argv, p["root"])
+
+    def _start_heal(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
+        dirs = load_directories(p["dirs"])
+        model_type = str(body.get("type") or "LORA")
+        out_dir = path_for_type(dirs, model_type)
+        os.environ["LORA_DIR"] = str(out_dir)
+        argv = ["--cli", "--heal", "--out", str(out_dir)]
+        if body.get("refreshSidecars"):
+            argv.append("--refresh-sidecars")
+        if body.get("writeSwarm"):
+            argv.append("--write-swarm")
+        if body.get("purgeOrphans"):
+            argv.append("--purge-orphans")
+        if body.get("dryRun"):
+            argv.append("--dry-run")
         return _spawn_run(argv, p["root"])
 
     def _api_get(self, path: str, qs: dict[str, list[str]]) -> None:

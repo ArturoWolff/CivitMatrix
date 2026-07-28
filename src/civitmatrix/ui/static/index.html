@@ -146,6 +146,9 @@
           <label class="field" title="Full catalog matching filters (not limited by preview max). Uncheck to download only checked rows + version picks.">
             <input id="fDownloadAll" type="checkbox" checked /> Download all matching filters
           </label>
+          <label class="field" title="Also write SwarmUI *.swarm.json (off by default; SM .cm-info.json always written)">
+            <input id="fWriteSwarm" type="checkbox" /> Write SwarmUI .swarm.json
+          </label>
         </div>
         <div class="list-wrap">
           <table class="models">
@@ -209,6 +212,12 @@
           <button type="button" id="btnClearLog">Clear console</button>
           <button type="button" id="btnRefreshFails">Refresh failures</button>
         </div>
+        <div class="row panel">
+          <label class="field" title="Re-fetch Civit metadata and rewrite .cm-info.json for complete installs">
+            <input id="fRefreshSidecars" type="checkbox" /> Refresh sidecars on heal
+          </label>
+          <button type="button" id="btnHeal" title="Repair incomplete sidecars; with Refresh, also rewrite SourceUrl / optional Swarm">Heal library</button>
+        </div>
         <div class="fail-wrap">
           <table class="models fails">
             <thead>
@@ -228,7 +237,7 @@
           <div class="help-body">
             <p><strong>Main</strong> — set filters → Populate (preview) → Start. Keep “Download all matching filters” on for the full catalog; uncheck to use checked rows and version latest/pick.</p>
             <p><strong>Directories</strong> — set Models root / per-type folders (Browse…), API key, base URL, disk floor → Save (writes <code>.env</code> atomically; key never echoed back).</p>
-            <p><strong>Logs</strong> — live events, retryable failure list, Retry failed + resume.</p>
+            <p><strong>Logs</strong> — live events, retryable failure list, Retry failed + resume, Heal library (optional Refresh sidecars + Write Swarm from Main).</p>
             <p><strong>Control</strong> — Pause finishes the current file then waits; Resume continues; Cancel cooperatively stops the run.</p>
             <p>Bound to <code>127.0.0.1</code> only. Headless: <code>./run.sh --cli …</code>. Docs: <code>docs/GUIDE.md</code>.</p>
           </div>

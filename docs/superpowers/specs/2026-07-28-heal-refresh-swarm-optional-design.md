@@ -1,7 +1,7 @@
 # Heal refresh sidecars + optional Swarm writes
 
 **Date:** 2026-07-28  
-**Status:** Approved in chat; awaiting user review of this written spec  
+**Status:** Implemented 2026-07-28  
 **Repo:** CivitMatrix
 
 ## Problem
