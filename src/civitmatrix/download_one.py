@@ -20,7 +20,7 @@ from civitmatrix.indexer import (
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
-from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
+from civitmatrix.sm_sidecars import build_cm_info, build_swarm_json, sort_hints_from_tags
 from civitmatrix.verify_blake3 import (
     remote_blake3_from_file_info,
     verify_weight_blake3,
@@ -440,10 +440,20 @@ def process_one(
                 preview_tmp.unlink(missing_ok=True)
                 logger.log(f"WARN preview failed model={model['id']}: {e}")
 
-        cm = build_cm_info(model, version, file_info, stem, out_dir)
+        cm = build_cm_info(
+            model, version, file_info, stem, out_dir, base_url=client.base_url
+        )
         if preview_path is not None:
             cm["ThumbnailImageUrl"] = str(preview_path)
-        info_path.write_text(json.dumps(cm, ensure_ascii=False, indent=2), encoding="utf-8")
+        info_path.write_text(
+            json.dumps(cm, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        swarm = build_swarm_json(model, version, base_url=client.base_url)
+        if swarm is not None:
+            swarm_path = out_dir / f"{stem}.swarm.json"
+            swarm_path.write_text(
+                json.dumps(swarm, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
         logger.append_jsonl(
             logger.manifest_path,
