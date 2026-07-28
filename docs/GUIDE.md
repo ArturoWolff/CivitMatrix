@@ -217,7 +217,7 @@ After each weight download (including Range resume), CivitMatrix hashes the file
 
 CivitMatrix keeps **one version per model**: the newest matching base-model version.
 
-- After `skip_hash` / `skip_version` / successful download+verify, older local stems with the same `ModelId` (weight + `.cm-info.json` + preview) are deleted.
+- After `skip_hash` / `skip_version` / successful download+verify, older local stems with the same `ModelId` (weight + `.cm-info.json` + `.swarm.json` + preview) are deleted.
 - Event: `prune_old_version`; job count: `pruned`.
 - Opt out: `./run.sh --cli --keep-old-versions`
 
@@ -257,7 +257,7 @@ What it does:
 1. Scans `--out` for incomplete sidecars (missing ModelId / VersionId / BLAKE3)
 2. Hashes those weights (BLAKE3), looks up `GET /api/v1/model-versions/by-hash/{hash}`  
    (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
-3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3) and fetches a preview when missing
+3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3; sets `SourceUrl` when ids are known), writes `.swarm.json` when a Civit URL can be built, and fetches a preview when missing
 4. Deletes empty/corrupt weights; re-downloads when a VersionId is known
 5. Orphan sidecars (no weight): re-download if VersionId known, else report — or delete with `--purge-orphans`
 

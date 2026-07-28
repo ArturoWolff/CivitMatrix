@@ -125,6 +125,7 @@ def _delete_weight_bundle(out_dir: Path, stem: str, *, dry_run: bool) -> list[st
     for p in [
         out_dir / f"{stem}.safetensors",
         out_dir / f"{stem}.cm-info.json",
+        out_dir / f"{stem}.swarm.json",
         *out_dir.glob(f"{stem}.preview.*"),
     ]:
         if p.is_file() and not p.name.endswith(".partial"):

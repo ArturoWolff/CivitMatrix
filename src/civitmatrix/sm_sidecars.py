@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from civitmatrix.logging_io import utc_now
 from civitmatrix.preview_media import find_preview_path
+
+# Strip embedded data:image / base64 blobs from HTML descriptions (never write into sidecars).
+_DATA_IMG_TAG_RE = re.compile(
+    r"""<img\b[^>]*\bsrc\s*=\s*["']?data:image[^"'>\s]*["']?[^>]*/?\s*>""",
+    re.IGNORECASE,
+)
+_DATA_IMAGE_URI_RE = re.compile(r"data:image[^\s\"'>]+", re.IGNORECASE)
+
+
+def strip_data_images_from_html(text: str) -> str:
+    """Remove data:image URIs and <img> tags that use them; keep normal HTML text/links."""
+    if not text:
+        return text
+    out = _DATA_IMG_TAG_RE.sub("", text)
+    return _DATA_IMAGE_URI_RE.sub("", out)
 
 
 def civit_model_source_url(
@@ -99,8 +115,8 @@ def build_swarm_json(
     desc_parts: list[str] = [
         f'From <a href="{url}" target="_blank">{url}</a>\n',
     ]
-    v_desc = version.get("description") or ""
-    m_desc = model.get("description") or ""
+    v_desc = strip_data_images_from_html(version.get("description") or "")
+    m_desc = strip_data_images_from_html(model.get("description") or "")
     # Prefer version description; append model description when both exist and differ
     if v_desc:
         desc_parts.append(v_desc if v_desc.endswith("\n") else v_desc + "\n")

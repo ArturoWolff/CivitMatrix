@@ -50,11 +50,13 @@ class VersionPruneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             _write_info(d, "old", model_id=1, version_id=100)
+            (d / "old.swarm.json").write_text("{}", encoding="utf-8")
             removed = delete_stem_bundle(d, "old")
             self.assertFalse((d / "old.safetensors").exists())
             self.assertFalse((d / "old.cm-info.json").exists())
+            self.assertFalse((d / "old.swarm.json").exists())
             self.assertFalse((d / "old.preview.png").exists())
-            self.assertGreaterEqual(len(removed), 3)
+            self.assertGreaterEqual(len(removed), 4)
 
     def test_prune_old_versions_updates_index(self):
         with tempfile.TemporaryDirectory() as td:

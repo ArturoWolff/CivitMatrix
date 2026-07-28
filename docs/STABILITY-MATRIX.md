@@ -15,10 +15,11 @@ For each model version:
 | File | Role |
 |------|------|
 | `{stem}.safetensors` | Weights (hash identity) |
-| `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags) |
+| `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags, `SourceUrl`) |
+| `{stem}.swarm.json` | SwarmUI ModelSpec sidecar (Civit link in description; no base64 thumbnails) |
 | `{stem}.preview.*` | Preview / thumbnail — extension matches content (`.jpeg`, `.png`, `.webp`, `.mp4`, …) |
 
-The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, etc.).
+The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, `SourceUrl`, etc.).
 
 ## Folder map
 

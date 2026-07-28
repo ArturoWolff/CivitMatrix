@@ -26,6 +26,9 @@ class TestCivitModelSourceUrl(unittest.TestCase):
         self.assertIsNone(civit_model_source_url("https://civitai.red", None, 2))
         self.assertIsNone(civit_model_source_url("https://civitai.red", 1, None))
 
+    def test_empty_base_url(self) -> None:
+        self.assertIsNone(civit_model_source_url("", 1, 2))
+
 
 class TestBuildCmInfoSourceUrl(unittest.TestCase):
     def test_source_url_set(self) -> None:
@@ -114,6 +117,31 @@ class TestBuildSwarmJson(unittest.TestCase):
         )
         assert payload is not None
         self.assertEqual(payload["modelspec.title"], "OnlyModel")
+
+    def test_strips_data_image_from_description(self) -> None:
+        payload = build_swarm_json(
+            {
+                "id": 1,
+                "name": "M",
+                "description": '<p>Hi</p><img src="data:image/jpeg;base64,AAAA" />',
+                "creator": {},
+                "tags": [],
+            },
+            {
+                "id": 2,
+                "name": "V",
+                "description": "See data:image/png;base64,BBBB here",
+                "trainedWords": [],
+            },
+            base_url="https://civitai.red",
+        )
+        assert payload is not None
+        desc = payload["modelspec.description"]
+        self.assertNotIn("data:image", desc)
+        self.assertNotIn("base64,AAAA", desc)
+        self.assertNotIn("base64,BBBB", desc)
+        self.assertIn("<p>Hi</p>", desc)
+        self.assertIn("See  here", desc)
 
 
 if __name__ == "__main__":

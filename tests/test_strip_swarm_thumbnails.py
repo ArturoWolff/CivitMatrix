@@ -39,6 +39,16 @@ class TestStripSwarmThumbnails(unittest.TestCase):
             self.assertEqual(counts["stripped"], 1)
             self.assertEqual(json.loads(p.read_text(encoding="utf-8")), original)
 
+    def test_non_dict_json_counts_as_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "null.swarm.json").write_text("null", encoding="utf-8")
+            (root / "list.swarm.json").write_text("[1, 2]", encoding="utf-8")
+            counts = strip_swarm_thumbnails(root, dry_run=False)
+            self.assertEqual(counts["scanned"], 2)
+            self.assertEqual(counts["errors"], 2)
+            self.assertEqual(counts["stripped"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

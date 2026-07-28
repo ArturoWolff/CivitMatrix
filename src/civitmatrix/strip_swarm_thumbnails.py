@@ -12,10 +12,14 @@ def strip_swarm_thumbnails(out_dir: Path, *, dry_run: bool = False) -> dict[str,
     for path in sorted(out_dir.glob("*.swarm.json")):
         counts["scanned"] += 1
         try:
-            data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            parsed: Any = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             counts["errors"] += 1
             continue
+        if not isinstance(parsed, dict):
+            counts["errors"] += 1
+            continue
+        data: dict[str, Any] = parsed
         if "modelspec.thumbnail" not in data:
             counts["unchanged"] += 1
             continue

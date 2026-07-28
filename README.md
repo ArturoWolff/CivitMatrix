@@ -33,7 +33,7 @@ CivitMatrix:
 1. Lists models from the CivitAI API (any base model / type — Anima LoRAs are the showcase default)
 2. Picks the newest version that matches your base model
 3. Downloads weights into your SM Models folder
-4. Writes **SM-native sidecars**: `.cm-info.json` + preview (extension matches real media type)
+4. Writes **SM-native sidecars**: `.cm-info.json` (with `SourceUrl`) + `.swarm.json` + preview (extension matches real media type)
 5. Skips what you already have; logs failures for later retries
 6. Opens a **local Win95 batch UI** by default (`127.0.0.1`) and exposes a **live control plane** (`job.json`, cancel / pause / status) for long CLI runs
 
@@ -47,7 +47,7 @@ flowchart LR
   B --> C{Already have BLAKE3?}
   C -->|yes| D[Skip]
   C -->|no| E[Download safetensors]
-  E --> F[Write .cm-info.json]
+  E --> F[Write .cm-info.json + .swarm.json]
   F --> G[Write preview]
   G --> H[SM index refresh]
   H --> I[Green Installed]
@@ -168,11 +168,12 @@ Downloads land as:
 ```text
 YourModels/Lora/
   my-lora.safetensors
-  my-lora.cm-info.json
+  my-lora.cm-info.json   # SourceUrl → Civit model page
+  my-lora.swarm.json     # SwarmUI ModelSpec (lean; no thumbnails)
   my-lora.preview.png    # or .jpeg / .webp / .mp4 — sniffed from content
 ```
 
-That matches what SM writes when you download from its browser — so hashes index cleanly and connected metadata (triggers, version ids, etc.) stays available.
+That matches what SM writes when you download from its browser — so hashes index cleanly and connected metadata (triggers, version ids, etc.) stays available. Optional: `./run.sh --cli --strip-swarm-thumbnails` removes legacy `modelspec.thumbnail` blobs from existing `.swarm.json` files.
 
 Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 

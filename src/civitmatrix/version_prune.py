@@ -64,6 +64,7 @@ def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
         out_dir / f"{stem}.safetensors",
         out_dir / f"{stem}.safetensors.partial",
         out_dir / f"{stem}.cm-info.json",
+        out_dir / f"{stem}.swarm.json",
         out_dir / f"{stem}.preview.download",
         out_dir / f"{stem}.preview.download.partial",
     ]
