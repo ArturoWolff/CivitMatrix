@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from civitmatrix.indexer import (
     unique_stem,
 )
 from civitmatrix.job_state import JobState
-from civitmatrix.logging_io import RunLogger
+from civitmatrix.logging_io import RunLogger, utc_now
 from civitmatrix.preview_media import finalize_preview_file, pick_preview_url
 from civitmatrix.sm_sidecars import build_cm_info, sort_hints_from_tags
 from civitmatrix.verify_blake3 import (
@@ -284,6 +285,7 @@ def process_one(
             )
 
     try:
+        weight_committed = False
         logger.log(f"DOWNLOAD model={model['id']} ver={version_id} -> {weight_path.name}")
         if job:
             job.emit(
@@ -381,6 +383,7 @@ def process_one(
             )
 
         if v_status == "ok":
+            weight_committed = True
             if job and not stale_meta_ok:
                 job.emit(
                     "verify_ok",
@@ -389,6 +392,7 @@ def process_one(
                     **_model_fields(model, version),
                 )
         elif v_status == "skipped":
+            weight_committed = True
             if job:
                 job.emit(
                     "verify_skipped",
@@ -501,8 +505,13 @@ def process_one(
             detail=str(e),
             **_model_fields(model, version),
         )
-        weight_path.unlink(missing_ok=True)
-        preview_tmp.unlink(missing_ok=True)
+        if not weight_committed:
+            weight_path.unlink(missing_ok=True)
+            preview_tmp.unlink(missing_ok=True)
+        else:
+            logger.log(
+                f"WARN keeping verified weight after forbidden error stem={stem}: {e}"
+            )
         return "forbidden"
     except FileNotFoundError as e:
         _release_reservation(
@@ -518,8 +527,13 @@ def process_one(
             detail=str(e),
             **_model_fields(model, version),
         )
-        weight_path.unlink(missing_ok=True)
-        preview_tmp.unlink(missing_ok=True)
+        if not weight_committed:
+            weight_path.unlink(missing_ok=True)
+            preview_tmp.unlink(missing_ok=True)
+        else:
+            logger.log(
+                f"WARN keeping verified weight after not_found error stem={stem}: {e}"
+            )
         return "not_found"
     except Exception as e:
         _release_reservation(
@@ -535,11 +549,16 @@ def process_one(
             detail=repr(e),
             **_model_fields(model, version),
         )
-        weight_path.unlink(missing_ok=True)
-        info_path.unlink(missing_ok=True)
-        preview_tmp.unlink(missing_ok=True)
-        if preview_path is not None:
-            preview_path.unlink(missing_ok=True)
+        if not weight_committed:
+            weight_path.unlink(missing_ok=True)
+            info_path.unlink(missing_ok=True)
+            preview_tmp.unlink(missing_ok=True)
+            if preview_path is not None:
+                preview_path.unlink(missing_ok=True)
+        else:
+            logger.log(
+                f"WARN keeping verified weight after error stem={stem}: {e!r}"
+            )
         return "error"
 
 

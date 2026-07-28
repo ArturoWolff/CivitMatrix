@@ -19,31 +19,51 @@ def sanitize_stem(name: str, max_len: int = 120) -> str:
 
 
 def load_local_index(out_dir: Path) -> tuple[set[str], set[int], set[str]]:
-    """Return (blake3_upper, version_ids, existing_stems_lower)."""
+    """
+    Return (blake3_upper, version_ids, existing_stems_lower).
+
+    Skip sets only include *complete* installs: non-empty ``*.safetensors`` plus a
+    matching ``*.cm-info.json`` that has both VersionId and Hashes.BLAKE3.
+    Orphan info/weight (or incomplete sidecars) still reserve stems for naming
+    but never count as already-installed — so the next run will re-fetch/heal
+    instead of faking Stability Matrix Installed.
+    """
     blake3s: set[str] = set()
     version_ids: set[int] = set()
     stems: set[str] = set()
     if not out_dir.is_dir():
         return blake3s, version_ids, stems
 
-    for p in out_dir.glob("*.safetensors"):
-        stems.add(p.stem.lower())
+    weights = {p.stem: p for p in out_dir.glob("*.safetensors")}
+    for stem in weights:
+        stems.add(stem.lower())
 
     for p in out_dir.glob("*.cm-info.json"):
-        stems.add(p.name[: -len(".cm-info.json")].lower())
+        stem = p.name[: -len(".cm-info.json")]
+        stems.add(stem.lower())
+        wp = weights.get(stem)
+        if wp is None:
+            continue
+        try:
+            if wp.stat().st_size <= 0:
+                continue
+        except OSError:
+            continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(data, dict):
+            continue
         h = (data.get("Hashes") or {}).get("BLAKE3")
-        if h:
-            blake3s.add(str(h).upper())
         vid = data.get("VersionId")
-        if vid is not None:
-            try:
-                version_ids.add(int(vid))
-            except (TypeError, ValueError):
-                pass
+        if not h or vid is None:
+            continue
+        try:
+            version_ids.add(int(vid))
+        except (TypeError, ValueError):
+            continue
+        blake3s.add(str(h).upper())
     return blake3s, version_ids, stems
 
 

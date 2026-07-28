@@ -33,6 +33,7 @@ from civitmatrix.listing_cache import (
     probe_cache,
 )
 from civitmatrix.logging_io import RunLogger, utc_now
+from civitmatrix.sm_sidecars import build_cm_info
 from civitmatrix.model_filters import model_passes_filters
 from civitmatrix.partial_sweep import purge_stale_partials
 from civitmatrix.pause_control import PauseGate
