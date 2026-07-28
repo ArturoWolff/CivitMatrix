@@ -7,12 +7,25 @@ from civitmatrix.logging_io import utc_now
 from civitmatrix.preview_media import find_preview_path
 
 
+def civit_model_source_url(
+    base_url: str, model_id: Any, version_id: Any
+) -> str | None:
+    if model_id is None or version_id is None:
+        return None
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return None
+    return f"{base}/models/{model_id}?modelVersionId={version_id}"
+
+
 def build_cm_info(
     model: dict[str, Any],
     version: dict[str, Any],
     file_info: dict[str, Any],
     local_stem: str,
     out_dir: Path,
+    *,
+    base_url: str = "",
 ) -> dict[str, Any]:
     """Build a Stability Matrix–compatible .cm-info.json payload."""
     creator = model.get("creator") or {}
@@ -24,6 +37,7 @@ def build_cm_info(
     tag_names = [t for t in tag_names if t]
 
     preview = find_preview_path(out_dir, local_stem)
+    source_url = civit_model_source_url(base_url, model.get("id"), version.get("id"))
     return {
         "ModelId": model.get("id"),
         "ModelName": model.get("name"),
@@ -63,7 +77,54 @@ def build_cm_info(
         "ThumbnailImageUrl": str(preview) if preview is not None else None,
         "InferenceDefaults": None,
         "Source": 0,
-        "SourceUrl": None,
+        "SourceUrl": source_url,
+    }
+
+
+def build_swarm_json(
+    model: dict[str, Any],
+    version: dict[str, Any],
+    *,
+    base_url: str,
+) -> dict[str, Any] | None:
+    """Build SwarmUI ModelSpec sidecar. Returns None if URL cannot be built."""
+    url = civit_model_source_url(base_url, model.get("id"), version.get("id"))
+    if url is None:
+        return None
+
+    model_name = (model.get("name") or "").strip()
+    version_name = (version.get("name") or "").strip()
+    title = f"{model_name} - {version_name}" if version_name else model_name
+
+    desc_parts: list[str] = [
+        f'From <a href="{url}" target="_blank">{url}</a>\n',
+    ]
+    v_desc = version.get("description") or ""
+    m_desc = model.get("description") or ""
+    # Prefer version description; append model description when both exist and differ
+    if v_desc:
+        desc_parts.append(v_desc if v_desc.endswith("\n") else v_desc + "\n")
+    if m_desc and m_desc != v_desc:
+        desc_parts.append(m_desc if m_desc.endswith("\n") else m_desc + "\n")
+
+    creator = model.get("creator") or {}
+    trained = version.get("trainedWords") or []
+    trigger = ", ".join(str(t) for t in trained if t)
+
+    tags = model.get("tags") or []
+    tag_names = [t if isinstance(t, str) else t.get("name") for t in tags]
+    tag_names = [t for t in tag_names if t]
+    tags_joined = ", ".join(str(t) for t in tag_names)
+
+    date = version.get("publishedAt") or utc_now()
+
+    return {
+        "modelspec.title": title,
+        "modelspec.description": "".join(desc_parts),
+        "modelspec.date": date,
+        "modelspec.author": creator.get("username") or "",
+        "modelspec.trigger_phrase": trigger,
+        "modelspec.tags": tags_joined,
     }
 
 
