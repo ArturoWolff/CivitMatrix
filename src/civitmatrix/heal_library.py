@@ -284,11 +284,16 @@ def heal_library(
         preview = _ensure_preview(
             client, version, out_dir, stem, dry_run=dry_run, log=log
         )
-        payload = build_cm_info(model, version, file_info, stem, out_dir)
-        if preview is not None:
-            payload["ThumbnailImageUrl"] = str(preview)
-        info_out = out_dir / f"{stem}.cm-info.json"
-        _write_sidecar(info_out, payload, dry_run=dry_run)
+        try:
+            payload = build_cm_info(model, version, file_info, stem, out_dir)
+            if preview is not None:
+                payload["ThumbnailImageUrl"] = str(preview)
+            info_out = out_dir / f"{stem}.cm-info.json"
+            _write_sidecar(info_out, payload, dry_run=dry_run)
+        except Exception as e:
+            log(f"HEAL sidecar write failed stem={stem} (keeping weight): {e!r}")
+            bump("heal_sidecar_failed")
+            continue
         log(
             f"HEAL repaired stem={stem} model={model.get('id')} ver={version.get('id')}"
             + (" (dry-run)" if dry_run else "")
@@ -382,10 +387,15 @@ def _redownload_version(
         file_info = {**file_info, "hashes": hashes}
 
     preview = _ensure_preview(client, version, out_dir, stem, dry_run=False, log=log)
-    payload = build_cm_info(model, version, file_info, stem, out_dir)
-    if preview is not None:
-        payload["ThumbnailImageUrl"] = str(preview)
-    (out_dir / f"{stem}.cm-info.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    try:
+        payload = build_cm_info(model, version, file_info, stem, out_dir)
+        if preview is not None:
+            payload["ThumbnailImageUrl"] = str(preview)
+        (out_dir / f"{stem}.cm-info.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        # Weight already verified — never delete it because sidecar write failed.
+        log(f"HEAL sidecar write failed stem={stem} (keeping weight): {e!r}")
+        return False
     return True

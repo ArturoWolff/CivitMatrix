@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -468,8 +469,6 @@ def _iter_models_for_run(
         )
 
     if retry_failed:
-        import time
-
         ids = logger.load_failed_model_ids()
         logger.log(f"Retry mode: {len(ids)} unique retryable modelIds")
         for mid in ids:
@@ -486,8 +485,6 @@ def _iter_models_for_run(
         return
 
     if selection_map:
-        import time
-
         logger.log(f"Selection mode: {len(selection_map)} modelId(s)")
         for mid in selection_map:
             try:
