@@ -10,6 +10,7 @@ from civitmatrix import __version__
 from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
 from civitmatrix.downloader import run_batch, run_heal
+from civitmatrix.strip_swarm_thumbnails import strip_swarm_thumbnails
 from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import print_status_cli
@@ -190,6 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--heal",
         action="store_true",
         help="Consolidate library: repair sidecars, fix bad/missing weights",
+    )
+    ctrl.add_argument(
+        "--strip-swarm-thumbnails",
+        action="store_true",
+        help="One-shot: remove modelspec.thumbnail from existing *.swarm.json under out dir",
     )
     p.add_argument(
         "--json",
@@ -415,6 +421,10 @@ def main(argv: list[str] | None = None) -> int:
             disk_floor_gib = 2.0
 
     client = CivitClient(base_url, api_key)
+    if args.strip_swarm_thumbnails:
+        counts = strip_swarm_thumbnails(out_dir, dry_run=args.dry_run)
+        print(f"strip-swarm-thumbnails: {counts}")
+        return 0
     if args.heal:
         return run_heal(
             client=client,
