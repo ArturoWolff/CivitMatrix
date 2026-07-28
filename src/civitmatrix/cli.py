@@ -330,6 +330,22 @@ def main(argv: list[str] | None = None) -> int:
         return request_pause_cli(logs_dir, logs_dir / "job.json")
     if args.resume:
         return request_resume_cli(logs_dir, logs_dir / "job.json")
+    if args.strip_swarm_thumbnails:
+        from civitmatrix.directories_config import load_directories, path_for_type
+
+        model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
+        if args.out:
+            out_dir = Path(args.out).expanduser()
+        elif os.environ.get("LORA_DIR"):
+            out_dir = Path(os.environ["LORA_DIR"]).expanduser()
+        else:
+            dirs_cfg = load_directories(logs_dir / "directories.json")
+            out_dir = path_for_type(dirs_cfg, model_type)
+        if not out_dir.is_absolute():
+            out_dir = (root / out_dir).resolve()
+        counts = strip_swarm_thumbnails(out_dir, dry_run=args.dry_run)
+        print(f"strip-swarm-thumbnails: {counts}")
+        return 0
 
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
     logger = RunLogger(logs_dir)
@@ -421,10 +437,6 @@ def main(argv: list[str] | None = None) -> int:
             disk_floor_gib = 2.0
 
     client = CivitClient(base_url, api_key)
-    if args.strip_swarm_thumbnails:
-        counts = strip_swarm_thumbnails(out_dir, dry_run=args.dry_run)
-        print(f"strip-swarm-thumbnails: {counts}")
-        return 0
     if args.heal:
         return run_heal(
             client=client,
