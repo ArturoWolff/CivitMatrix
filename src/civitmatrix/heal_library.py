@@ -23,7 +23,76 @@ def _sidecar_incomplete(cm: dict[str, Any] | None) -> bool:
         return True
     if not (cm.get("Hashes") or {}).get("BLAKE3"):
         return True
+    # SourceUrl is required for Swarm/SM “Installed” links; fill via heal.
+    if not cm.get("SourceUrl"):
+        return True
     return False
+
+
+def _remote_unavailable(cm: dict[str, Any] | None) -> bool:
+    if not cm:
+        return False
+    meta = cm.get("CivitMatrix")
+    return isinstance(meta, dict) and bool(meta.get("remoteUnavailable"))
+
+
+def _mark_remote_unavailable(
+    out_dir: Path,
+    stem: str,
+    cm: dict[str, Any] | None,
+    *,
+    model: dict[str, Any] | None,
+    version: dict[str, Any] | None,
+    file_info: dict[str, Any] | None,
+    build_cm_info: BuildCmFn,
+    base_url: str,
+    reason: str,
+    dry_run: bool,
+    write_swarm: bool,
+    log: LogFn,
+) -> None:
+    """Keep the weight; write SourceUrl + flag so heal stops retrying forever."""
+    from civitmatrix.logging_io import utc_now
+    from civitmatrix.sm_sidecars import civit_model_source_url
+
+    if dry_run:
+        return
+    info_path = out_dir / f"{stem}.cm-info.json"
+    payload: dict[str, Any] = dict(cm) if isinstance(cm, dict) else {}
+    if model is not None and version is not None and file_info is not None:
+        try:
+            payload = build_cm_info(
+                model, version, file_info, stem, out_dir, base_url=base_url
+            )
+        except Exception as e:
+            log(f"HEAL remote-gone sidecar rebuild failed stem={stem}: {e!r}")
+    mid = payload.get("ModelId") or (model or {}).get("id")
+    vid = payload.get("VersionId") or (version or {}).get("id")
+    if not payload.get("SourceUrl"):
+        payload["SourceUrl"] = civit_model_source_url(base_url, mid, vid)
+    meta = dict(payload.get("CivitMatrix") or {})
+    meta["remoteUnavailable"] = True
+    meta["remoteUnavailableReason"] = reason
+    meta["remoteUnavailableAt"] = utc_now()
+    payload["CivitMatrix"] = meta
+    _write_sidecar(info_path, payload, dry_run=False)
+    if write_swarm and model is not None and version is not None:
+        from civitmatrix.sm_sidecars import build_swarm_json
+
+        swarm = build_swarm_json(model, version, base_url=base_url)
+        if swarm is not None:
+            _write_sidecar(out_dir / f"{stem}.swarm.json", swarm, dry_run=False)
+
+
+def _bump_redownload_result(bump: Callable[[str], None], status: str) -> None:
+    if status == "ok":
+        bump("heal_redownloaded")
+    elif status == "gated":
+        bump("heal_gated")
+    elif status == "gone":
+        bump("heal_remote_gone")
+    else:
+        bump("heal_redownload_failed")
 
 
 def _pick_file_for_hash(version: dict[str, Any], blake3: str) -> dict[str, Any] | None:
@@ -207,7 +276,7 @@ def heal_library(
                 if job:
                     job.emit("heal_bad_weight", stem=stem, removed=removed)
                 if version_id and not dry_run:
-                    if _redownload_version(
+                    status = _redownload_version(
                         client,
                         out_dir,
                         stem,
@@ -216,8 +285,9 @@ def heal_library(
                         log=log,
                         dry_run=dry_run,
                         write_swarm=write_swarm,
-                    ):
-                        bump("heal_redownloaded")
+                        existing_cm=cm,
+                    )
+                    _bump_redownload_result(bump, status)
                 continue
 
         if weight is None and info_path is not None:
@@ -233,19 +303,19 @@ def heal_library(
                 log(f"HEAL re-download missing weight stem={stem} ver={version_id}")
                 if dry_run:
                     bump("heal_would_redownload")
-                elif _redownload_version(
-                    client,
-                    out_dir,
-                    stem,
-                    int(version_id),
-                    build_cm_info=build_cm_info,
-                    log=log,
-                    dry_run=dry_run,
-                    write_swarm=write_swarm,
-                ):
-                    bump("heal_redownloaded")
                 else:
-                    bump("heal_redownload_failed")
+                    status = _redownload_version(
+                        client,
+                        out_dir,
+                        stem,
+                        int(version_id),
+                        build_cm_info=build_cm_info,
+                        log=log,
+                        dry_run=dry_run,
+                        write_swarm=write_swarm,
+                        existing_cm=cm,
+                    )
+                    _bump_redownload_result(bump, status)
                 continue
             log(f"HEAL orphan sidecar (no VersionId) stem={stem}")
             bump("heal_orphan_unresolved")
@@ -276,6 +346,19 @@ def heal_library(
         recorded = ((cm or {}).get("Hashes") or {}).get("BLAKE3")
         if recorded and str(recorded).upper() != str(local_hash).upper():
             version_id = cm.get("VersionId") if cm else None
+            if _remote_unavailable(cm):
+                log(
+                    f"HEAL hash mismatch stem={stem} — remote unavailable; keeping local"
+                )
+                bump("heal_remote_gone_kept")
+                if job:
+                    job.emit(
+                        "heal_remote_gone_kept",
+                        stem=stem,
+                        recorded=str(recorded).upper(),
+                        local=str(local_hash).upper(),
+                    )
+                continue
             log(f"HEAL hash mismatch stem={stem} — re-downloading to fix")
             bump("heal_hash_mismatch")
             if job:
@@ -291,7 +374,7 @@ def heal_library(
             if dry_run:
                 bump("heal_would_redownload")
                 continue
-            if _redownload_version(
+            status = _redownload_version(
                 client,
                 out_dir,
                 stem,
@@ -300,10 +383,9 @@ def heal_library(
                 log=log,
                 dry_run=dry_run,
                 write_swarm=write_swarm,
-            ):
-                bump("heal_redownloaded")
-            else:
-                bump("heal_redownload_failed")
+                existing_cm=cm,
+            )
+            _bump_redownload_result(bump, status)
             continue
 
         version: dict[str, Any] | None = None
@@ -346,6 +428,13 @@ def heal_library(
         remote_h = remote_blake3_from_file_info(file_info)
         if remote_h and str(remote_h).upper() != str(local_hash).upper():
             version_id = version.get("id") or (cm or {}).get("VersionId")
+            if _remote_unavailable(cm):
+                log(
+                    f"HEAL remote BLAKE3 mismatch stem={stem} — "
+                    "remote unavailable; keeping local"
+                )
+                bump("heal_remote_gone_kept")
+                continue
             log(
                 f"HEAL remote BLAKE3 mismatch stem={stem} — re-downloading to fix"
             )
@@ -356,7 +445,7 @@ def heal_library(
             if dry_run:
                 bump("heal_would_redownload")
                 continue
-            if _redownload_version(
+            status = _redownload_version(
                 client,
                 out_dir,
                 stem,
@@ -365,10 +454,9 @@ def heal_library(
                 log=log,
                 dry_run=dry_run,
                 write_swarm=write_swarm,
-            ):
-                bump("heal_redownloaded")
-            else:
-                bump("heal_redownload_failed")
+                existing_cm=cm,
+            )
+            _bump_redownload_result(bump, status)
             continue
 
         # Sidecars already good and weight matches remote — nothing to rewrite
@@ -464,12 +552,37 @@ def _redownload_version(
     log: LogFn,
     dry_run: bool,
     write_swarm: bool = False,
-) -> bool:
+    existing_cm: dict[str, Any] | None = None,
+) -> str:
+    """
+    Re-download a version into ``stem``. Returns status:
+    ``ok`` | ``gated`` | ``gone`` | ``failed``.
+    Never deletes an existing weight on failure.
+    """
+    from civitmatrix.redact import redact_secrets
+
     try:
         version = client.get_json(f"{client.base_url}/api/v1/model-versions/{version_id}")
     except Exception as e:
-        log(f"HEAL redownload version fetch failed ver={version_id}: {e}")
-        return False
+        msg = redact_secrets(str(e))
+        log(f"HEAL redownload version fetch failed ver={version_id}: {msg}")
+        if "404" in msg:
+            _mark_remote_unavailable(
+                out_dir,
+                stem,
+                existing_cm,
+                model=None,
+                version=None,
+                file_info=None,
+                build_cm_info=build_cm_info,
+                base_url=client.base_url,
+                reason="version_404",
+                dry_run=dry_run,
+                write_swarm=False,
+                log=log,
+            )
+            return "gone"
+        return "failed"
 
     files = version.get("files") or []
     file_info = None
@@ -483,24 +596,47 @@ def _redownload_version(
     if file_info is None and files:
         file_info = files[0]
     if file_info is None:
-        return False
+        return "failed"
 
     download_url = file_info.get("downloadUrl") or (
         f"{client.base_url}/api/download/models/{version_id}"
     )
     weight_path = out_dir / f"{stem}.safetensors"
     if dry_run:
-        return True
+        return "ok"
     # Download beside the existing weight; only replace after BLAKE3 verify.
     staging = out_dir / f"{stem}.safetensors.heal-new"
     staging.unlink(missing_ok=True)
     try:
         client.download(download_url, staging)
+    except PermissionError as e:
+        log(f"HEAL redownload gated stem={stem}: {redact_secrets(str(e))}")
+        staging.unlink(missing_ok=True)
+        return "gated"
+    except FileNotFoundError as e:
+        log(f"HEAL redownload gone stem={stem}: {redact_secrets(str(e))}")
+        staging.unlink(missing_ok=True)
+        model = _model_from_version_payload(version)
+        _mark_remote_unavailable(
+            out_dir,
+            stem,
+            existing_cm,
+            model=model,
+            version=version,
+            file_info=file_info,
+            build_cm_info=build_cm_info,
+            base_url=client.base_url,
+            reason="download_404",
+            dry_run=False,
+            write_swarm=write_swarm,
+            log=log,
+        )
+        return "gone"
     except Exception as e:
-        log(f"HEAL redownload failed stem={stem}: {e}")
+        log(f"HEAL redownload failed stem={stem}: {redact_secrets(str(e))}")
         staging.unlink(missing_ok=True)
         # Never delete the existing weight because a redownload failed.
-        return False
+        return "failed"
 
     remote_h = remote_blake3_from_file_info(file_info)
     v_status, local_hash, v_reason = verify_weight_blake3(
@@ -509,7 +645,7 @@ def _redownload_version(
     if v_status == "fail":
         log(f"HEAL verify fail stem={stem} reason={v_reason}")
         staging.unlink(missing_ok=True)
-        return False
+        return "failed"
 
     staging.replace(weight_path)
 
@@ -549,5 +685,5 @@ def _redownload_version(
     except Exception as e:
         # Weight already verified — never delete it because sidecar write failed.
         log(f"HEAL sidecar write failed stem={stem} (keeping weight): {e!r}")
-        return False
-    return True
+        return "failed"
+    return "ok"

@@ -121,7 +121,7 @@ def maybe_prune_old_versions(
             job.emit(
                 "prune_old_version",
                 localStem=cand.get("stem"),
-                versionId=cand.get("versionId"),
+                oldVersionId=cand.get("versionId"),
                 keepVersionId=version_id,
                 **_model_fields(model, version),
             )
@@ -310,11 +310,14 @@ def process_one(
                     pct=fields.get("pct"),
                 )
             if job:
+                # Merge model fields first so progress keys win; avoid duplicate kwargs.
                 job.emit(
                     event,
-                    localStem=stem,
-                    **fields,
-                    **_model_fields(model, version),
+                    **{
+                        **_model_fields(model, version),
+                        **fields,
+                        "localStem": stem,
+                    },
                 )
 
         client.download(

@@ -9,6 +9,7 @@ import requests
 from civitmatrix import __version__
 from civitmatrix.download_progress import DownloadProgress
 from civitmatrix.http_policy import OriginMismatch, assert_same_origin
+from civitmatrix.redact import redact_secrets
 
 DownloadEventFn = Callable[[str, dict[str, Any]], None]
 
@@ -162,9 +163,13 @@ class CivitClient:
                     headers=headers,
                 ) as r:
                     if r.status_code in (401, 403):
-                        raise PermissionError(f"HTTP {r.status_code} downloading {url}")
+                        raise PermissionError(
+                            f"HTTP {r.status_code} downloading {redact_secrets(url)}"
+                        )
                     if r.status_code == 404:
-                        raise FileNotFoundError(f"HTTP 404 downloading {url}")
+                        raise FileNotFoundError(
+                            f"HTTP 404 downloading {redact_secrets(url)}"
+                        )
 
                     if existing > 0 and r.status_code == 416:
                         tmp.unlink(missing_ok=True)
