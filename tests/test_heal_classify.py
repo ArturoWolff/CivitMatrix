@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from civitmatrix.heal_library import (
     _bump_redownload_result,
+    _hash_mismatch_kept,
     _mark_remote_unavailable,
     _redownload_version,
     _remote_unavailable,
@@ -38,6 +39,12 @@ class TestHealClassify(unittest.TestCase):
             _remote_unavailable({"CivitMatrix": {"remoteUnavailable": True}})
         )
 
+    def test_hash_mismatch_kept_flag(self) -> None:
+        self.assertFalse(_hash_mismatch_kept({}))
+        self.assertTrue(
+            _hash_mismatch_kept({"CivitMatrix": {"hashMismatchKept": True}})
+        )
+
     def test_bump_redownload_result(self) -> None:
         counts: dict[str, int] = {}
 
@@ -47,6 +54,7 @@ class TestHealClassify(unittest.TestCase):
         _bump_redownload_result(bump, "ok")
         _bump_redownload_result(bump, "gated")
         _bump_redownload_result(bump, "gone")
+        _bump_redownload_result(bump, "hash_mismatch_kept")
         _bump_redownload_result(bump, "failed")
         self.assertEqual(
             counts,
@@ -54,6 +62,7 @@ class TestHealClassify(unittest.TestCase):
                 "heal_redownloaded": 1,
                 "heal_gated": 1,
                 "heal_remote_gone": 1,
+                "heal_hash_mismatch_kept": 1,
                 "heal_redownload_failed": 1,
             },
         )

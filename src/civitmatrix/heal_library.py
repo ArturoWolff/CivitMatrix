@@ -36,6 +36,88 @@ def _remote_unavailable(cm: dict[str, Any] | None) -> bool:
     return isinstance(meta, dict) and bool(meta.get("remoteUnavailable"))
 
 
+def _hash_mismatch_kept(cm: dict[str, Any] | None) -> bool:
+    """CDN download works but bytes never match published BLAKE3 — stop redownload thrash."""
+    if not cm:
+        return False
+    meta = cm.get("CivitMatrix")
+    return isinstance(meta, dict) and bool(meta.get("hashMismatchKept"))
+
+
+def _mark_hash_mismatch_kept(
+    out_dir: Path,
+    stem: str,
+    cm: dict[str, Any] | None,
+    *,
+    model: dict[str, Any] | None,
+    version: dict[str, Any] | None,
+    file_info: dict[str, Any] | None,
+    build_cm_info: BuildCmFn,
+    base_url: str,
+    local_blake3: str,
+    published_blake3: str | None,
+    dry_run: bool,
+    write_swarm: bool,
+    log: LogFn,
+) -> None:
+    """Keep weight; record stale-remote-meta so heal does not redownload forever."""
+    from civitmatrix.logging_io import utc_now
+    from civitmatrix.sm_sidecars import civit_model_source_url
+
+    if dry_run:
+        return
+    info_path = out_dir / f"{stem}.cm-info.json"
+    payload: dict[str, Any] = dict(cm) if isinstance(cm, dict) else {}
+    fi = dict(file_info) if isinstance(file_info, dict) else {}
+    published = dict(fi.get("hashes") or {})
+    hashes = dict(published)
+    hashes["BLAKE3"] = str(local_blake3).upper()
+    fi = {**fi, "hashes": hashes}
+    if model is not None and version is not None and fi:
+        try:
+            payload = build_cm_info(
+                model, version, fi, stem, out_dir, base_url=base_url
+            )
+        except Exception as e:
+            log(f"HEAL hash-mismatch sidecar rebuild failed stem={stem}: {e!r}")
+    mid = payload.get("ModelId") or (model or {}).get("id")
+    vid = payload.get("VersionId") or (version or {}).get("id")
+    if not payload.get("SourceUrl"):
+        payload["SourceUrl"] = civit_model_source_url(base_url, mid, vid)
+    # Local hash is authoritative for the file on disk.
+    h = dict(payload.get("Hashes") or {})
+    h["BLAKE3"] = str(local_blake3).upper()
+    payload["Hashes"] = h
+    weight = out_dir / f"{stem}.safetensors"
+    meta = dict(payload.get("CivitMatrix") or {})
+    meta["hashMismatchKept"] = True
+    meta["staleRemoteMeta"] = True
+    meta["localBlake3"] = str(local_blake3).upper()
+    meta["publishedBlake3"] = (
+        str(published_blake3).upper() if published_blake3 else None
+    )
+    meta["publishedHashes"] = {
+        k: published.get(k) for k in ("BLAKE3", "SHA256", "CRC32", "AutoV2")
+    }
+    meta["hashMismatchKeptAt"] = utc_now()
+    meta["hashMismatchKeptReason"] = (
+        "CDN download bytes do not match API-published BLAKE3; "
+        "version API is live; kept complete downloaded weight"
+    )
+    if weight.is_file():
+        meta["downloadSizeBytes"] = weight.stat().st_size
+    if fi.get("sizeKB") is not None:
+        meta["apiSizeKB"] = fi.get("sizeKB")
+    payload["CivitMatrix"] = meta
+    _write_sidecar(info_path, payload, dry_run=False)
+    if write_swarm and model is not None and version is not None:
+        from civitmatrix.sm_sidecars import build_swarm_json
+
+        swarm = build_swarm_json(model, version, base_url=base_url)
+        if swarm is not None:
+            _write_sidecar(out_dir / f"{stem}.swarm.json", swarm, dry_run=False)
+
+
 def _mark_remote_unavailable(
     out_dir: Path,
     stem: str,
@@ -91,6 +173,8 @@ def _bump_redownload_result(bump: Callable[[str], None], status: str) -> None:
         bump("heal_gated")
     elif status == "gone":
         bump("heal_remote_gone")
+    elif status == "hash_mismatch_kept":
+        bump("heal_hash_mismatch_kept")
     else:
         bump("heal_redownload_failed")
 
@@ -359,6 +443,20 @@ def heal_library(
                         local=str(local_hash).upper(),
                     )
                 continue
+            if _hash_mismatch_kept(cm):
+                log(
+                    f"HEAL hash mismatch stem={stem} — stale remote meta; "
+                    "keeping local (hashMismatchKept)"
+                )
+                bump("heal_hash_mismatch_kept")
+                if job:
+                    job.emit(
+                        "heal_hash_mismatch_kept",
+                        stem=stem,
+                        recorded=str(recorded).upper(),
+                        local=str(local_hash).upper(),
+                    )
+                continue
             log(f"HEAL hash mismatch stem={stem} — re-downloading to fix")
             bump("heal_hash_mismatch")
             if job:
@@ -434,6 +532,13 @@ def heal_library(
                     "remote unavailable; keeping local"
                 )
                 bump("heal_remote_gone_kept")
+                continue
+            if _hash_mismatch_kept(cm):
+                log(
+                    f"HEAL remote BLAKE3 mismatch stem={stem} — "
+                    "stale remote meta; keeping local (hashMismatchKept)"
+                )
+                bump("heal_hash_mismatch_kept")
                 continue
             log(
                 f"HEAL remote BLAKE3 mismatch stem={stem} — re-downloading to fix"
@@ -556,7 +661,7 @@ def _redownload_version(
 ) -> str:
     """
     Re-download a version into ``stem``. Returns status:
-    ``ok`` | ``gated`` | ``gone`` | ``failed``.
+    ``ok`` | ``gated`` | ``gone`` | ``hash_mismatch_kept`` | ``failed``.
     Never deletes an existing weight on failure.
     """
     from civitmatrix.redact import redact_secrets
@@ -642,12 +747,6 @@ def _redownload_version(
     v_status, local_hash, v_reason = verify_weight_blake3(
         staging, remote_h, skip=False
     )
-    if v_status == "fail":
-        log(f"HEAL verify fail stem={stem} reason={v_reason}")
-        staging.unlink(missing_ok=True)
-        return "failed"
-
-    staging.replace(weight_path)
 
     model_id = version.get("modelId")
     if model_id is not None:
@@ -657,6 +756,54 @@ def _redownload_version(
             model = _model_from_version_payload(version)
     else:
         model = _model_from_version_payload(version)
+
+    if v_status == "fail":
+        # Never delete the existing weight. If the CDN gave a complete file
+        # whose BLAKE3 never matches published meta, keep the new bytes and
+        # mark hashMismatchKept so heal stops thrashing.
+        size_kb = file_info.get("sizeKB")
+        staging_ok = False
+        if staging.is_file():
+            sz = staging.stat().st_size
+            if size_kb is not None:
+                try:
+                    expected = int(float(size_kb) * 1024)
+                    staging_ok = abs(sz - expected) <= 4096 or sz >= expected * 0.99
+                except (TypeError, ValueError):
+                    staging_ok = sz > 0
+            else:
+                staging_ok = sz > 0
+        if staging_ok and local_hash:
+            log(
+                f"HEAL verify fail stem={stem} reason={v_reason} — "
+                "keeping complete download (stale remote meta)"
+            )
+            staging.replace(weight_path)
+            preview = _ensure_preview(
+                client, version, out_dir, stem, dry_run=False, log=log
+            )
+            _ = preview
+            _mark_hash_mismatch_kept(
+                out_dir,
+                stem,
+                existing_cm,
+                model=model,
+                version=version,
+                file_info=file_info,
+                build_cm_info=build_cm_info,
+                base_url=client.base_url,
+                local_blake3=str(local_hash).upper(),
+                published_blake3=remote_h,
+                dry_run=False,
+                write_swarm=write_swarm,
+                log=log,
+            )
+            return "hash_mismatch_kept"
+        log(f"HEAL verify fail stem={stem} reason={v_reason}")
+        staging.unlink(missing_ok=True)
+        return "failed"
+
+    staging.replace(weight_path)
 
     if not local_hash:
         try:
