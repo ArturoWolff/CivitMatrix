@@ -122,6 +122,7 @@ Then refresh Stability Matrix’s model index (or restart SM) to see green **Ins
 | NSFW | `NSFW` | `--nsfw` / `--no-nsfw` | `true` |
 | Match base version | `MATCH_BASE_VERSION` | `--match-base-version` | `true` |
 | Concurrency | `MAX_CONCURRENT` | `--concurrency` | `2` |
+| Download rate limit (MiB/s, global) | `DOWNLOAD_RATE_LIMIT_MBS` | `--download-rate-limit` | `0` (unlimited; example uses `5`) |
 | Keep preview temps | `KEEP_PARTIALS` | `--keep-partials` | `false` |
 | Range-resume weights | `RESUME_PARTIALS` | `--resume-partials` / `--no-resume-partials` | `true` |
 | Skip BLAKE3 verify | `SKIP_VERIFY` | `--skip-verify` | `false` |
@@ -198,6 +199,8 @@ Catalog processing is **streamed**: models are submitted to the worker pool as l
 **Listing cache (opt-in):** `--use-listing-cache` reuses a complete page cache under `logs/listing-cache/` for the current filters; default runs always re-list. `--refresh-listing` forces a fresh API list (and rewrites the cache when caching is on).
 
 **Disk floor:** `--disk-floor-gib` (default 2; env `DISK_FLOOR_GIB`; `0`=off). Below floor → runner exit **5**. Soft warn when a file’s known size exceeds free space.
+
+**Download rate limit:** `--download-rate-limit` / env `DOWNLOAD_RATE_LIMIT_MBS` (MiB/s, **global** across workers; `0`=unlimited). Caps total CDN/weight bandwidth so the rest of the network stays usable.
 
 **Progress:** stderr `\r` line + `download_progress` events; `failed.jsonl` rows share `eventId` with fail events.
 

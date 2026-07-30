@@ -9,16 +9,26 @@ import requests
 from civitmatrix import __version__
 from civitmatrix.download_progress import DownloadProgress
 from civitmatrix.http_policy import OriginMismatch, assert_same_origin
+from civitmatrix.rate_limit import BandwidthLimiter
 from civitmatrix.redact import redact_secrets
 
 DownloadEventFn = Callable[[str, dict[str, Any]], None]
 
 
 class CivitClient:
-    def __init__(self, base_url: str, api_key: str, timeout: int = 120) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: int = 120,
+        *,
+        rate_limit_bytes_per_sec: float = 0.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        # Shared across concurrent download workers on this client instance.
+        self.rate_limiter = BandwidthLimiter(rate_limit_bytes_per_sec)
         ua = f"civitmatrix/{__version__}"
         # API session carries Bearer for list/metadata only.
         self.session = requests.Session()
@@ -221,6 +231,7 @@ class CivitClient:
                     with tmp.open(mode) as f:
                         for chunk in r.iter_content(chunk_size=1024 * 1024):
                             if chunk:
+                                self.rate_limiter.acquire(len(chunk))
                                 f.write(chunk)
                                 prog.add(len(chunk))
                     prog.finish()

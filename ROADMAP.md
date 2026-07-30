@@ -26,6 +26,7 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Stream process while listing (bounded in-flight pool; phase `running`)
 - [x] Disk floor + soft size warn (`--disk-floor-gib`, runner exit 5)
 - [x] Byte download progress (CLI + events)
+- [x] Global download rate limit (`DOWNLOAD_RATE_LIMIT_MBS` / `--download-rate-limit`)
 - [x] `failed.jsonl` ↔ `eventId` on fail events
 
 ## v0.2 — Filters

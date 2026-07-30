@@ -270,6 +270,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort if free disk on out dir is below this many GiB (default: env DISK_FLOOR_GIB or 2; 0=disable)",
     )
     p.add_argument(
+        "--download-rate-limit",
+        type=float,
+        default=None,
+        metavar="MIB_S",
+        help=(
+            "Global download cap in MiB/s shared across workers "
+            "(default: env DOWNLOAD_RATE_LIMIT_MBS or 0=unlimited)"
+        ),
+    )
+    p.add_argument(
         "--purge-orphans",
         action="store_true",
         help="With --heal, delete .cm-info/preview that have no matching weight",
@@ -458,7 +468,19 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             disk_floor_gib = 2.0
 
-    client = CivitClient(base_url, api_key)
+    from civitmatrix.rate_limit import mib_per_sec_to_bytes, parse_rate_limit_mib
+
+    if args.download_rate_limit is not None:
+        rate_mib = float(args.download_rate_limit)
+    else:
+        rate_mib = parse_rate_limit_mib(os.environ.get("DOWNLOAD_RATE_LIMIT_MBS"), 0.0)
+    rate_bps = mib_per_sec_to_bytes(rate_mib)
+    client = CivitClient(base_url, api_key, rate_limit_bytes_per_sec=rate_bps)
+    if rate_bps > 0:
+        logger.log(f"Download rate limit: {rate_mib:g} MiB/s (global, shared)")
+    else:
+        logger.log("Download rate limit: unlimited")
+
     if args.heal:
         return run_heal(
             client=client,

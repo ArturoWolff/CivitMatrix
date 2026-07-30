@@ -137,6 +137,21 @@ Note: runner exit **5** (disk) is unrelated to `--status` exit **5** (paused).
 
 Default free-space floor is **2 GiB** on the output directory (`--disk-floor-gib` / `DISK_FLOOR_GIB`; `0` disables hard checks). At start the runner emits `disk_status` and aborts with exit 5 if below floor. Mid-run downloads recheck and may emit `disk_full` / stop with exit 5. Soft `disk_warn` when a known file size exceeds free space but the floor is still met.
 
+### Download rate limit
+
+Cap total download bandwidth (weights, heal redownloads, previews) with a **global** shared limiter:
+
+```bash
+# .env
+DOWNLOAD_RATE_LIMIT_MBS=5
+
+# or one-shot
+./run.sh --cli --download-rate-limit 5
+./run.sh --cli --download-rate-limit 0   # unlimited
+```
+
+Units are **MiB/s** (1024² bytes). With `--concurrency 2`, both workers share the same budget (not 5+5).
+
 ### Byte progress
 
 Weight downloads print a throttled `\r` progress line on stderr and emit `download_progress` events about every **max(5%, 8 MiB)**. `job.json` `current` may include `bytes` / `total` / `pct` for `--status`.
