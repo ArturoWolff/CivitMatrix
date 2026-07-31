@@ -16,6 +16,13 @@ def browse_directory(start: str | None = None) -> dict[str, Any]:
         initial = initial.parent if initial.parent.is_dir() else Path.home()
     start_s = str(initial)
 
+    def _normalize_path(chosen: str) -> str:
+        """Prefer native separators (backslash on Windows) for UI display."""
+        try:
+            return str(Path(chosen))
+        except (OSError, ValueError):
+            return chosen.replace("/", "\\") if os.name == "nt" else chosen
+
     if shutil.which("zenity"):
         try:
             proc = subprocess.run(
@@ -34,7 +41,7 @@ def browse_directory(start: str | None = None) -> dict[str, Any]:
         except (OSError, subprocess.TimeoutExpired) as e:
             return {"error": str(e)}
         if proc.returncode == 0 and proc.stdout.strip():
-            return {"path": proc.stdout.strip()}
+            return {"path": _normalize_path(proc.stdout.strip())}
         return {"cancelled": True}
 
     if shutil.which("kdialog"):
@@ -49,7 +56,7 @@ def browse_directory(start: str | None = None) -> dict[str, Any]:
         except (OSError, subprocess.TimeoutExpired) as e:
             return {"error": str(e)}
         if proc.returncode == 0 and proc.stdout.strip():
-            return {"path": proc.stdout.strip()}
+            return {"path": _normalize_path(proc.stdout.strip())}
         return {"cancelled": True}
 
     try:
@@ -75,5 +82,5 @@ def browse_directory(start: str | None = None) -> dict[str, Any]:
     finally:
         root.destroy()
     if chosen:
-        return {"path": chosen}
+        return {"path": _normalize_path(chosen)}
     return {"cancelled": True}

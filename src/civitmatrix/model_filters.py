@@ -1,4 +1,4 @@
-"""Client-side model filter helpers (tags, category, users, format, dates)."""
+"""Client-side model filter helpers (tags, category, users, stats, base-only, NSFW, format, dates)."""
 
 from __future__ import annotations
 
@@ -71,13 +71,80 @@ def matches_category(model: dict[str, Any], category: str | None) -> bool:
     return want in model_tag_set_lower(model)
 
 
+def _creator_username(model: dict[str, Any]) -> str:
+    creator = (model.get("creator") or {}).get("username") or ""
+    return str(creator).lstrip("@").lower()
+
+
 def matches_users(model: dict[str, Any], users: Iterable[str] | None) -> bool:
     """Empty users → any creator. Non-empty → creator username in list (case-insensitive)."""
     allow = [str(u).lstrip("@").lower() for u in (users or []) if u]
     if not allow:
         return True
-    creator = (model.get("creator") or {}).get("username") or ""
-    return str(creator).lstrip("@").lower() in allow
+    return _creator_username(model) in allow
+
+
+def matches_users_deny(model: dict[str, Any], users_deny: Iterable[str] | None) -> bool:
+    """Empty deny → pass. Non-empty → fail if creator username is in the deny list."""
+    deny = [str(u).lstrip("@").lower() for u in (users_deny or []) if u]
+    if not deny:
+        return True
+    return _creator_username(model) not in deny
+
+
+def matches_min_stats(
+    model: dict[str, Any],
+    *,
+    min_downloads: int = 0,
+    min_likes: int = 0,
+) -> bool:
+    """Require stats.downloadCount / thumbsUpCount (likeCount fallback) floors. 0 = no floor."""
+    stats = model.get("stats") if isinstance(model.get("stats"), dict) else {}
+    downloads = int(stats.get("downloadCount") or 0)
+    likes_raw = stats.get("thumbsUpCount")
+    if likes_raw is None:
+        likes_raw = stats.get("likeCount")
+    likes = int(likes_raw or 0)
+    if min_downloads and downloads < int(min_downloads):
+        return False
+    if min_likes and likes < int(min_likes):
+        return False
+    return True
+
+
+def matches_base_only(
+    model: dict[str, Any],
+    base_model: str | None,
+    *,
+    enabled: bool = False,
+) -> bool:
+    """
+    When enabled and base_model is not All: every modelVersion must have that baseModel
+    (drop multi-base / mismatched versions). Empty versions fail closed when enabled.
+    """
+    if not enabled or is_all_filter(base_model):
+        return True
+    want = str(base_model).strip()
+    versions = model.get("modelVersions") or []
+    if not versions:
+        return False
+    for ver in versions:
+        if (ver.get("baseModel") or "") != want:
+            return False
+    return True
+
+
+def matches_max_nsfw_level(model: dict[str, Any], max_level: int | None = None) -> bool:
+    """If max_level is an int, model.nsfwLevel must be <= max_level. Missing level fails closed."""
+    if max_level is None:
+        return True
+    raw = model.get("nsfwLevel")
+    if raw is None:
+        return False
+    try:
+        return int(raw) <= int(max_level)
+    except (TypeError, ValueError):
+        return False
 
 
 _FORMAT_ALIASES: dict[str, set[str]] = {
@@ -201,16 +268,26 @@ def model_passes_filters(
     tag_exclude: Iterable[str] | None = None,
     category: str | None = None,
     users: Iterable[str] | None = None,
+    users_deny: Iterable[str] | None = None,
     file_format: str | None = None,
     updated_from: str | date | None = None,
     updated_to: str | date | None = None,
+    min_downloads: int = 0,
+    min_likes: int = 0,
+    base_model: str | None = None,
+    base_only: bool = False,
+    max_nsfw_level: int | None = None,
 ) -> bool:
     return (
         matches_tag_filters(model, tag_include=tag_include, tag_exclude=tag_exclude)
         and matches_category(model, category)
         and matches_users(model, users)
+        and matches_users_deny(model, users_deny)
         and matches_format(model, file_format)
         and matches_updated_range(model, updated_from=updated_from, updated_to=updated_to)
+        and matches_min_stats(model, min_downloads=min_downloads, min_likes=min_likes)
+        and matches_base_only(model, base_model, enabled=base_only)
+        and matches_max_nsfw_level(model, max_nsfw_level)
     )
 
 

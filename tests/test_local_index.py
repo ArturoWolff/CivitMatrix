@@ -88,6 +88,32 @@ class LocalIndexPairingTests(unittest.TestCase):
             self.assertEqual(blake3, set())
             self.assertEqual(versions, set())
 
+    def test_recursive_nested_pair_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            nested = root / "character"
+            nested.mkdir()
+            (nested / "foo.safetensors").write_bytes(b"weight")
+            (nested / "foo.cm-info.json").write_text(
+                json.dumps(
+                    {
+                        "VersionId": 42,
+                        "ModelId": 7,
+                        "Hashes": {"BLAKE3": "abc123"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blake3, versions, stems = load_local_index(root)
+            self.assertIn("ABC123", blake3)
+            self.assertIn(42, versions)
+            self.assertIn("foo", stems)
+
+            flat_b3, flat_v, flat_stems = load_local_index(root, recursive=False)
+            self.assertEqual(flat_b3, set())
+            self.assertEqual(flat_v, set())
+            self.assertEqual(flat_stems, set())
+
 
 if __name__ == "__main__":
     unittest.main()

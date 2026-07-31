@@ -2,7 +2,20 @@
 
 CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 
-**Current package version: 0.2.0** (filters + local Win95 UI shipped).
+**Current package version: 1.0.0** (v0.2–v0.5 + QoL rate-limit = 1.0).
+
+## v1.0.0 — shipped
+
+v1.0 packages everything below as the first stable release:
+
+- [x] v0.1 core CLI + SM sidecars + control plane + heal / resume / verify  
+- [x] v0.2 filters (tags, stats floors, base-only, NSFW level, presets, …)  
+- [x] v0.3 categorize + recursive local index  
+- [x] v0.4 Win95 browser UI  
+- [x] v0.5 SM helpers (`--update-only`, `--sm-parity`, `--import-sm-manifest`, refresh hints)  
+- [x] QoL bandwidth / rate limits (`DOWNLOAD_RATE_LIMIT_MBS` / `--download-rate-limit`)
+
+Deferred post-1.0: Translations.
 
 ## v0.1 — shipped
 
@@ -32,19 +45,19 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 ## v0.2 — Filters
 
 - [x] Tag include / exclude  
-- [ ] Min downloads / likes  
-- [x] Creator allow / deny (`--users`)  
-- [ ] True **base-only** (exclude multi-base models)  
-- [ ] Date range + NSFW level caps  
-- [ ] Filter presets (JSON import/export)
+- [x] Min downloads / likes  
+- [x] Creator allow / deny (`--users` / `--users-deny`)  
+- [x] True **base-only** (exclude multi-base models)  
+- [x] Date range (`--updated-from` / `--updated-to`) + NSFW level caps (`--max-nsfw-level`)  
+- [x] Filter presets (JSON under `logs/filter-presets/`; `--filter-preset` + UI Save/Load)  
 - [x] Category + file format dims (CLI + UI)
 
 ## v0.3 — Categorizing
 
-- [ ] Auto-sort into `characters/` · `styles/` · `concepts/` · `clothes/`  
-- [ ] Use `manifest.jsonl` `sortHints` + tag heuristics  
-- [ ] Optional SM subfolder layouts without breaking the index  
-- [ ] Dry-run move plan before touching files
+- [x] Auto-sort into `characters/` · `styles/` · `concepts/` · `clothes/` (+ `uncategorized/`) via `--categorize`  
+- [x] Use cm-info `Tags` + `sort_hints_from_tags` heuristics (priority: character → clothes → style → concept)  
+- [x] Recursive local index (subfolder installs still skip / heal / prune / diagnostics)  
+- [x] Dry-run move plan by default; `--categorize --apply` writes (weight + sidecars + preview)
 
 ## v0.4 — GUI
 
@@ -52,16 +65,17 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Poll `job.json` / `events.jsonl` only (control plane already shipped)  
 - [x] Main / Directories / Logs; Start / Cancel / Pause / Resume  
 - [x] Populate + select models; version latest / multi  
-- [x] Filter dims: tags include/exclude, category, users, format  
+- [x] Filter dims: tags include/exclude, category, users, format, min stats, base-only, NSFW level, presets  
 - [x] Per-type output directories + Browse… + portable models root + theme stub + failures list + Help
-- [ ] Failure browser polish / saved presets
+- [x] Failure browser polish (all/retryable, search, export) + Main table search
+- [x] Saved filter presets UX (Load/Save)
 
 ## v0.5 — Deeper SM integration
 
-- [ ] Post-run “refresh index” guidance / helpers  
-- [ ] Update-only mode (newer version than installed)  
-- [ ] Parity checks vs SM connected metadata  
-- [ ] Optional import of existing SM libraries into the manifest
+- [x] Post-run “refresh index” guidance / helpers (`sm_refresh_hint` after batch/heal)  
+- [x] Update-only mode (newer version than installed) — `--update-only`  
+- [x] Parity checks vs SM connected metadata — `--sm-parity`  
+- [x] Optional import of existing SM libraries into the manifest — `--import-sm-manifest`
 
 ## Crash recovery (next)
 
@@ -75,10 +89,10 @@ CivitMatrix starts as a sharp CLI. Here’s where it’s headed.
 - [x] Preflight / free-disk floor (`--disk-floor-gib`, soft size warn, exit 5)  
 - [x] Byte-level download progress (CLI + `download_progress` events)  
 - [x] `failed.jsonl` linked to control-plane `eventId`  
-- [ ] Bandwidth / rate limits  
+- [x] Bandwidth / rate limits (`DOWNLOAD_RATE_LIMIT_MBS` / `--download-rate-limit`)  
 - [x] Listing cache (opt-in page blobs; `--use-listing-cache` / `--refresh-listing`)  
-- [ ] Better Windows path UX  
-- [ ] Translations
+- [x] Better Windows path UX (Browse/UI path separators)  
+- [ ] Translations (deferred post-1.0)
 
 ---
 

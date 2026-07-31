@@ -7,13 +7,16 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
+from civitmatrix.indexer import iter_cm_info_paths, relative_pair_stem
 from civitmatrix.preview_media import find_preview_path
 
 
-def iter_model_sidecars(out_dir: Path) -> Iterator[tuple[Path, dict[str, Any]]]:
+def iter_model_sidecars(
+    out_dir: Path, *, recursive: bool = True
+) -> Iterator[tuple[Path, dict[str, Any]]]:
     if not out_dir.is_dir():
         return
-    for info_path in out_dir.glob("*.cm-info.json"):
+    for info_path in iter_cm_info_paths(out_dir, recursive=recursive):
         try:
             data = json.loads(info_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):
@@ -32,7 +35,7 @@ def find_prune_candidates(
     want = int(model_id)
     keep = int(keep_version_id)
     out: list[dict[str, Any]] = []
-    for info_path, data in iter_model_sidecars(out_dir):
+    for info_path, data in iter_model_sidecars(out_dir, recursive=True):
         mid = data.get("ModelId")
         if mid is None:
             continue
@@ -44,7 +47,7 @@ def find_prune_candidates(
             continue
         if vid == keep:
             continue
-        stem = info_path.name[: -len(".cm-info.json")]
+        stem = relative_pair_stem(out_dir, info_path, cm_info=True)
         blake3 = (data.get("Hashes") or {}).get("BLAKE3")
         out.append(
             {
@@ -108,7 +111,7 @@ def prune_old_versions(
             continue
         pruned.append(cand)
         with index_lock:
-            local_stems.discard(stem.lower())
+            local_stems.discard(Path(stem).name.lower())
             try:
                 local_versions.discard(int(cand["versionId"]))
             except (TypeError, ValueError, KeyError):

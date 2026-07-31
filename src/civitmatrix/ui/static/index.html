@@ -126,8 +126,38 @@
             </select>
           </label>
           <label class="field">Users
-            <input id="fUsers" type="text" placeholder="ArturoWolff, needsmoney, to_eat" class="wide" title="Comma-separated creator usernames (no @)" />
+            <input id="fUsers" type="text" placeholder="ArturoWolff, needsmoney" class="wide" title="Comma-separated creator usernames (no @)" />
           </label>
+          <label class="field">Users deny
+            <input id="fUsersDeny" type="text" placeholder="spamuser, …" class="wide" title="Comma creators to exclude" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="field" title="Minimum downloadCount (0 = any)">Min DL
+            <input id="fMinDl" type="number" min="0" value="0" style="width:72px" />
+          </label>
+          <label class="field" title="Minimum thumbsUpCount / likes (0 = any)">Min likes
+            <input id="fMinLikes" type="number" min="0" value="0" style="width:72px" />
+          </label>
+          <label class="field" title="Every version must match Base (drop multi-base)">
+            <input id="fBaseOnly" type="checkbox" /> Base only
+          </label>
+          <label class="field">Max NSFW lvl
+            <select id="fMaxNsfw" title="Cap model.nsfwLevel (empty = no cap)">
+              <option value="" selected>—</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="4">4</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
+              <option value="32">32</option>
+            </select>
+          </label>
+          <label class="field">Preset
+            <input id="fPresetName" type="text" placeholder="name" style="width:100px" title="logs/filter-presets/NAME.json" />
+          </label>
+          <button type="button" id="btnPresetLoad" title="Load preset into form">Load</button>
+          <button type="button" id="btnPresetSave" title="Save current filters as preset">Save</button>
         </div>
         <div class="row">
           <label class="field">Tags include
@@ -150,6 +180,13 @@
             <input id="fWriteSwarm" type="checkbox" /> Write SwarmUI .swarm.json
           </label>
         </div>
+        <div class="row search-bar">
+          <label class="field grow" title="Filter loaded preview rows (client-side; does not re-fetch)">Search
+            <input id="tableSearch" type="text" class="wide" placeholder="name, id, or creator…" />
+          </label>
+          <button type="button" id="btnClearSearch" title="Clear search">Clear</button>
+          <span id="searchCount" class="muted">Showing 0 of 0</span>
+        </div>
         <div class="list-wrap">
           <table class="models">
             <thead>
@@ -169,6 +206,9 @@
           <span id="runCurrent" class="muted"></span>
           <span id="runCounts" class="muted"></span>
           <div class="progress" title="progress"><span id="progBar"></span></div>
+          <label class="field" title="Only download when a newer version exists than installed (needs CLI --update-only)">
+            <input id="fUpdateOnly" type="checkbox" /> Update only
+          </label>
           <button type="button" class="primary" id="btnStart">Start</button>
           <button type="button" id="btnPause">Pause</button>
           <button type="button" id="btnResume">Resume</button>
@@ -217,9 +257,25 @@
             <input id="fRefreshSidecars" type="checkbox" /> Refresh sidecars on heal
           </label>
           <button type="button" id="btnHeal" title="Repair incomplete sidecars; with Refresh, also rewrite SourceUrl / optional Swarm">Heal library</button>
+          <button type="button" id="btnCategorizeDry" title="Dry-run categorize (POST /api/categorize apply:false)">Categorize dry-run</button>
+          <button type="button" id="btnCategorizeApply" title="Apply categorize (POST /api/categorize apply:true)">Categorize apply</button>
+        </div>
+        <div class="row fail-toolbar">
+          <label class="field">
+            <input type="radio" name="failScope" value="retryable" checked /> Retryable
+          </label>
+          <label class="field">
+            <input type="radio" name="failScope" value="all" /> All
+          </label>
+          <label class="field grow" title="Filter failure rows (client-side)">Search failures
+            <input id="failSearch" type="text" class="wide" placeholder="id, reason, event…" />
+          </label>
+          <button type="button" id="btnExportFailsTxt" title="Download visible failures as text">Export .txt</button>
+          <button type="button" id="btnExportFailsJsonl" title="Download visible failures as JSONL">Export .jsonl</button>
+          <span id="failCount" class="muted">Showing 0</span>
         </div>
         <div class="fail-wrap">
-          <table class="models fails">
+          <table class="models fails dense">
             <thead>
               <tr>
                 <th>ModelId</th>
@@ -235,9 +291,9 @@
         <details class="help-panel" open>
           <summary>Help</summary>
           <div class="help-body">
-            <p><strong>Main</strong> — set filters → Populate (preview) → Start. Keep “Download all matching filters” on for the full catalog; uncheck to use checked rows and version latest/pick.</p>
-            <p><strong>Directories</strong> — set Models root / per-type folders (Browse…), API key, base URL, disk floor → Save (writes <code>.env</code> atomically; key never echoed back).</p>
-            <p><strong>Logs</strong> — live events, retryable failure list, Retry failed + resume, Heal library (optional Refresh sidecars + Write Swarm from Main).</p>
+            <p><strong>Main</strong> — set filters → Populate (preview) → use the <strong>search bar</strong> to filter loaded rows by name / id / creator (client-side; checkboxes stay) → Start. Keep “Download all matching filters” on for the full catalog; uncheck to use checked rows and version picks. Min DL / likes, Base only, Max NSFW lvl, Users deny, Preset Save/Load, and Update only apply to Populate/Start as supported.</p>
+            <p><strong>Directories</strong> — set Models root / per-type folders (Browse…), API key, base URL, disk floor → Save (writes <code>.env</code> atomically; key never echoed back). On Windows, Browse results show backslash paths.</p>
+            <p><strong>Logs</strong> — live events; failure browser (retryable/all, search, export); Retry failed + resume; Heal library; Categorize dry-run / apply (needs CLI).</p>
             <p><strong>Control</strong> — Pause finishes the current file then waits; Resume continues; Cancel cooperatively stops the run.</p>
             <p>Bound to <code>127.0.0.1</code> only. Headless: <code>./run.sh --cli …</code>. Docs: <code>docs/GUIDE.md</code>.</p>
           </div>

@@ -6,6 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from civitmatrix.indexer import (
+    iter_cm_info_paths,
+    iter_weight_paths,
+    relative_pair_stem,
+)
+
 
 def load_cm_info(path: Path) -> dict[str, Any] | None:
     try:
@@ -15,13 +21,20 @@ def load_cm_info(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def index_diagnostics(out_dir: Path) -> dict[str, Any]:
+def index_diagnostics(out_dir: Path, *, recursive: bool = True) -> dict[str, Any]:
     """Summarize why blake3 / version / stem counts may diverge."""
-    weights = {p.stem: p for p in out_dir.glob("*.safetensors")} if out_dir.is_dir() else {}
-    infos = {
-        p.name[: -len(".cm-info.json")]: p
-        for p in (out_dir.glob("*.cm-info.json") if out_dir.is_dir() else [])
-    }
+    if out_dir.is_dir():
+        weights = {
+            relative_pair_stem(out_dir, p): p
+            for p in iter_weight_paths(out_dir, recursive=recursive)
+        }
+        infos = {
+            relative_pair_stem(out_dir, p, cm_info=True): p
+            for p in iter_cm_info_paths(out_dir, recursive=recursive)
+        }
+    else:
+        weights = {}
+        infos = {}
 
     blake3s: set[str] = set()
     versions: set[int] = set()

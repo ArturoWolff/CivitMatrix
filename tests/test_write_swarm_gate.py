@@ -94,7 +94,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 "ModelId": 1,
                 "VersionId": 2,
                 "Hashes": {"BLAKE3": "DEAD"},
-                "SourceUrl": None,
+                "SourceUrl": "https://civitai.red/models/1?modelVersionId=2",
             }
             (out / "x.cm-info.json").write_text(json.dumps(cm), encoding="utf-8")
             client = MagicMock()
@@ -124,7 +124,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                         "ModelId": 10,
                         "VersionId": 20,
                         "Hashes": {"BLAKE3": local_hash},
-                        "SourceUrl": None,
+                        "SourceUrl": "https://civitai.red/models/10?modelVersionId=20",
                     }
                 ),
                 encoding="utf-8",
@@ -202,7 +202,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
             self.assertEqual(counts2.get("heal_sidecars_fresh"), 1)
             self.assertTrue((out / "x.swarm.json").is_file())
 
-            # write_swarm off does not delete existing swarm when forcing another rewrite
+            # Missing SourceUrl is incomplete → repair path; write_swarm off keeps existing swarm
             cm["SourceUrl"] = None
             (out / "x.cm-info.json").write_text(json.dumps(cm), encoding="utf-8")
             client.get_json.return_value = version
@@ -216,7 +216,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 refresh_sidecars=True,
                 write_swarm=False,
             )
-            self.assertEqual(counts3.get("heal_sidecars_refreshed"), 1)
+            self.assertEqual(counts3.get("heal_repaired"), 1)
             self.assertTrue((out / "x.swarm.json").is_file())
 
     def test_hash_mismatch_redownloads(self) -> None:

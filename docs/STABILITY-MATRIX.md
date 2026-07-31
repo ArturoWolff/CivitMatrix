@@ -35,12 +35,12 @@ Point `--out` / `LORA_DIR` at the matching folder for the type you download.
 
 ## Skip / resume behavior
 
-On startup CivitMatrix scans the output directory for:
+On startup CivitMatrix scans the output directory **recursively** for:
 
-- existing `.safetensors` stems  
-- BLAKE3 + `VersionId` from `.cm-info.json`  
+- existing `.safetensors` stems (basename reserved for naming)
+- BLAKE3 + `VersionId` from complete pairs (weight + matching `.cm-info.json` in the **same** directory)
 
-Already-present hashes/versions are skipped — safe to re-run after interruptions.
+Already-present hashes/versions are skipped — including installs under SM category subfolders — safe to re-run after interruptions.
 
 ## After downloading
 
@@ -48,10 +48,48 @@ Already-present hashes/versions are skipped — safe to re-run after interruptio
 2. Refresh / rebuild the model index (or restart)  
 3. Browse CivitAI in SM — matching cards should show green **Installed**
 
-## Future integration (roadmap)
+Successful batch and heal runs log this reminder and emit a control-plane event `sm_refresh_hint` in `logs/events.jsonl`.
 
-- One-click “open SM models folder” helpers in the GUI  
-- Optional post-run index refresh notes  
-- Update-only mode using installed version ids  
+## Update-only mode
 
-See [ROADMAP.md](../ROADMAP.md).
+Re-scan the catalog but only pull **newer** versions of models you already have:
+
+```bash
+./run.sh --cli --update-only
+./run.sh --cli --update-only --dry-run --limit 50
+```
+
+CivitMatrix builds `ModelId → max local VersionId` from recursive complete pairs (weight + `.cm-info.json`). For each listed model:
+
+| Local state | Action |
+|-------------|--------|
+| ModelId not installed | `skip_not_installed` |
+| Remote picked version ≤ local max | `skip_uptodate` |
+| Remote picked version newer | download + prune older versions (unless `--keep-old-versions`) |
+
+Job meta includes `updateOnly: true`.
+
+## Parity check
+
+Audit an existing SM library tree without hitting the API:
+
+```bash
+./run.sh --cli --sm-parity
+./run.sh --cli --sm-parity --out /path/to/Models/Lora
+```
+
+Reports missing `SourceUrl`, BLAKE3 mismatches (local file vs recorded), missing required fields, orphan sidecars / weights. Exit **0** if clean, **1** if any issues (summary + sample printed).
+
+## Import SM library → manifest
+
+Seed `logs/manifest.jsonl` from recursive `.cm-info.json` (useful when the folder was filled by SM or another tool):
+
+```bash
+./run.sh --cli --import-sm-manifest
+```
+
+Rows include `modelId`, `versionId`, `blake3`, `localStem`, and `sortHints` from Tags. Duplicate `versionId`s already in the manifest are skipped.
+
+## Related CLI
+
+See also `--heal` / `--refresh-sidecars` in [GUIDE.md](GUIDE.md). Roadmap: [ROADMAP.md](../ROADMAP.md).

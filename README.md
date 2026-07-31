@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <img alt="version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-2ee6a6?style=for-the-badge&labelColor=0b1220" />
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-2ee6a6?style=for-the-badge&labelColor=0b1220" /></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-3ecbff?style=for-the-badge&labelColor=0b1220" /></a>
   <img alt="Linux macOS Windows" src="https://img.shields.io/badge/os-Linux%20%7C%20macOS%20%7C%20Windows-f4f7fb?style=for-the-badge&labelColor=0b1220" />
@@ -156,6 +157,10 @@ No API key needed for these:
 ./run.sh --cli --heal --dry-run
 ./run.sh --cli --heal
 ./run.sh --cli --heal --purge-orphans
+
+# Sort into characters/ styles/ concepts/ clothes/ uncategorized/ (dry-run; add --apply to move)
+./run.sh --cli --categorize
+./run.sh --cli --categorize --apply
 ```
 
 Full walkthrough: [docs/GUIDE.md](docs/GUIDE.md) · Filters: [docs/FILTERS.md](docs/FILTERS.md)
@@ -187,14 +192,14 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `logs/job.json` | Live phase (`running` while streaming), counts, current model, timestamps |
 | `logs/events.jsonl` | Structured diary (`stream_start`, `listing_progress`, `download_*`, `fail`, `paused`, …) |
 | `logs/failed.jsonl` | Failures with `retryable` flag — feed `--retry-failed` |
-| `logs/manifest.jsonl` | Success rows + `sortHints` for upcoming categorizing |
+| `logs/manifest.jsonl` | Success rows + `sortHints` (feeds `--categorize`) |
 | `logs/run.log` | Console transcript |
 | `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
 | `<out>/.civitmatrix.lock` | One writer per output folder |
 
 On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
 
-Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart.
+Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart (recursive scan of the out dir, including SM category subfolders).
 
 **Listing cache (opt-in):** `--use-listing-cache` reuses a complete page cache under `logs/listing-cache/` for the current filters; default runs always re-list. `--refresh-listing` forces a fresh API list (and rewrites the cache when caching is on).
 
@@ -211,10 +216,12 @@ Catalog processing is **streamed**: models are submitted to the worker pool as l
 
 ## Roadmap (teaser)
 
-- **Filters (v0.2)** — tags / category / users / format shipped; min downloads, base-only, presets still planned  
-- **Categorizing** — auto-bucket into characters / styles / concepts / clothes  
-- **GUI** — shipped: `./run.sh` opens Win95 UI (Main / Directories / Logs); `./run.sh --cli` for scripts  
-- **Deeper SM hooks** — index refresh helpers, update-only mode  
+**v1.0.0** ships filters, categorize, Win95 UI, SM helpers, and download rate limits. Highlights:
+
+- **Filters** — `--min-downloads` / `--min-likes` / `--base-only` / `--max-nsfw-level` / `--filter-preset` (+ tags, category, users, format, date range)  
+- **Categorize** — `--categorize` (dry-run) / `--categorize --apply`; recursive local index  
+- **GUI** — `./run.sh` opens Win95 UI; `./run.sh --cli` for scripts  
+- **SM hooks** — `--update-only`, `sm_refresh_hint`, `--sm-parity`, `--import-sm-manifest`  
 
 See the full plan: [ROADMAP.md](ROADMAP.md)
 

@@ -147,6 +147,18 @@ input[type="text"], input[type="number"], input[type="password"], select, textar
 input[type="text"].wide, input[type="password"].wide { min-width: 220px; }
 input.tag { min-width: 280px; }
 
+.search-bar .grow,
+.fail-toolbar .grow {
+  flex: 1;
+  min-width: 180px;
+}
+
+.search-bar #tableSearch,
+.fail-toolbar #failSearch {
+  width: 100%;
+  min-width: 160px;
+}
+
 button, .btn {
   font-family: var(--font);
   font-size: 12px;
@@ -184,7 +196,27 @@ button.primary { font-weight: bold; }
 }
 
 .list-wrap { flex: 1; }
-.fail-wrap { max-height: 140px; flex: 0 0 auto; }
+.fail-wrap { max-height: 220px; flex: 0 0 auto; }
+
+.fail-toolbar {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+table.fails.dense th,
+table.fails.dense td {
+  padding: 1px 4px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+table.fails.dense td {
+  max-width: 320px;
+}
+
+#modelBody tr.row-hidden {
+  display: none;
+}
 
 table.models {
   width: 100%;

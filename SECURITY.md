@@ -20,7 +20,7 @@ The UI binds **only** to `127.0.0.1`. That is not multi-user authentication.
 
 - On start, the server writes a random token to `logs/.ui-session` (mode `0600`, gitignored).
 - Mutating routes require header `X-CivitMatrix-Token`:  
-  `POST /api/populate`, `/api/run`, `/api/cancel`, `/api/pause`, `/api/resume`, `/api/retry-failed`, `/api/directories`, `/api/browse-dir`.
+  `POST /api/populate`, `/api/run`, `/api/cancel`, `/api/pause`, `/api/resume`, `/api/retry-failed`, `/api/heal`, `/api/categorize`, `/api/directories`, `/api/browse-dir`, `/api/filter-presets`.
 - The page loads the token via `GET /api/session` (same-origin).
 - Request bodies larger than **2 MiB** are rejected (413).
 - Populate/run **ignore** any client-supplied `baseUrl`; the API host comes from `.env` / saved Directories settings only.

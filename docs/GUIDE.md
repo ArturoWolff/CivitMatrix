@@ -107,7 +107,7 @@ These commands do **not** need `CIVITAI_API_KEY`. They read/write under `logs/`:
 - `cancel.request` / `pause.request` — request flags
 - Output folder gets `.civitmatrix.lock` so two writers don’t collide
 
-Batch runs **stream** models as API pages arrive (phase `running`, `streamMode: true` in `job.json`). Workers stay bounded (`concurrency * 2` in flight) so large catalogs are not held in RAM. Skip / Range resume / BLAKE3 verify still apply per model — restarting a run does not re-download already verified files.
+Batch runs **stream** models as API pages arrive (phase `running`, `streamMode: true` in `job.json`). Workers stay bounded (`concurrency * 2` in flight) so large catalogs are not held in RAM. Skip / Range resume / BLAKE3 verify still apply per model — restarting a run does not re-download already verified files (local index is recursive under `--out`, so SM category subfolders still skip).
 
 ### `--status` exit codes
 
@@ -236,17 +236,43 @@ CivitMatrix keeps **one version per model**: the newest matching base-model vers
 - Event: `prune_old_version`; job count: `pruned`.
 - Opt out: `./run.sh --cli --keep-old-versions`
 
+## Update-only + SM library tools
+
+Keep an existing folder current without downloading brand-new models:
+
+```bash
+./run.sh --cli --update-only
+./run.sh --cli --update-only --dry-run --limit 100
+```
+
+Skips `skip_not_installed` / `skip_uptodate`; downloads only when the remote picked version is newer than the max local `VersionId` for that `ModelId`, then prunes older versions (unless `--keep-old-versions`).
+
+After a successful batch or heal, CivitMatrix logs an SM refresh reminder and emits `sm_refresh_hint`.
+
+Offline library helpers (no API key):
+
+```bash
+./run.sh --cli --sm-parity                 # exit 1 if SourceUrl/hash/field issues
+./run.sh --cli --import-sm-manifest        # append cm-info rows into logs/manifest.jsonl
+```
+
+Details: [STABILITY-MATRIX.md](STABILITY-MATRIX.md).
+
 ## Local Win95 UI (default)
 
 `./run.sh` opens a localhost UI (`127.0.0.1:7860`) with three views:
 
 | View | Purpose |
 |------|---------|
-| **Main** | Filters → **Populate** preview → per-row **latest / pick…** versions → **Start**. “Download all matching filters” = full catalog (ignores preview cap). Uncheck it to download only checked rows + version picks. |
-| **Directories** | Models root + per-type folders (**Browse…**), API key (masked), base URL, disk floor → Save (atomic `.env`; syncs `LORA_DIR`) |
-| **Logs** | Job counts, retryable failure table, event console, Help; **Retry failed + resume** |
+| **Main** | Filters → **Populate** preview → **search bar** (name / id / creator, client-side) → per-row **latest / pick…** versions → **Start**. “Download all matching filters” = full catalog (ignores preview cap). Uncheck it to download only checked rows + version picks. Optional **Update only** (`--update-only`). |
+| **Directories** | Models root + per-type folders (**Browse…**), API key (masked), base URL, disk floor → Save (atomic `.env`; syncs `LORA_DIR`). On **Windows**, Browse results and path fields use backslash separators. |
+| **Logs** | Job counts; failure browser (retryable/all, search, export txt/jsonl); event console; Help; **Retry failed + resume**; Heal; Categorize dry-run / apply (`POST /api/categorize`) |
 
 Theme: Win95 (default) or Modern stub (CSS variables). Bound to `127.0.0.1` only.
+
+### Windows paths
+
+When picking folders with **Browse…**, the UI normalizes Windows drive paths to backslashes (`C:\StabilityMatrix\Data\Models\Lora`). Forward slashes still work when pasting; Save persists whatever you enter.
 
 Headless / scripts:
 
@@ -255,9 +281,29 @@ Headless / scripts:
 ./run.sh --cli --retry-failed
 ```
 
-Tag filters: empty include = all tags; empty exclude = exclude none; both set = must match include and avoid exclude. Format / Category / Users are separate dimensions (AND with tags).
+Tag filters: empty include = all tags; empty exclude = exclude none; both set = must match include and avoid exclude. Format / Category / Users / Users deny / Min downloads & likes / Base only / Max NSFW level / Updated from–to are separate dimensions (AND with tags). See [FILTERS.md](FILTERS.md); presets save to `logs/filter-presets/`.
 
-## Library heal (`--heal`)
+## Categorize library (`--categorize`)
+
+Sort installed weights into flat bucket folders under `--out` using `.cm-info.json` `Tags` (same vocabulary as `sortHints` / `sort_hints_from_tags`):
+
+| Bucket | Tag hints (any match) |
+|--------|------------------------|
+| `characters/` | character, characters |
+| `clothes/` | clothing, clothes, costume |
+| `styles/` | style, styles |
+| `concepts/` | concept, concepts |
+| `uncategorized/` | no category tag |
+
+Priority when several match: **character → clothes → style → concept**. Each move keeps basename files together (weight + `.cm-info.json` + `.swarm.json` + preview) in the bucket root — not nested further. Already-correct bucket installs are skipped. Recursive scan (same as local index).
+
+```bash
+./run.sh --cli --categorize              # dry-run plan + counts (default)
+./run.sh --cli --categorize --apply      # perform moves
+./run.sh --cli --categorize --out ./downloads/Lora
+```
+
+GUI (Logs): **Categorize dry-run** / **Categorize apply** → `POST /api/categorize` with `{apply: false|true}`.
 
 If index counts don’t match (`blake3` / `versions` / `stems`), some files are missing metadata or have orphan sidecars. Heal consolidates the folder:
 

@@ -16,6 +16,7 @@ from civitmatrix.indexer import (
     pick_matching_version,
     pick_primary_file,
     unique_stem,
+    update_only_skip_reason,
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
@@ -148,6 +149,8 @@ def process_one(
     keep_old_versions: bool = False,
     force_version: dict[str, Any] | None = None,
     write_swarm: bool = False,
+    update_only: bool = False,
+    local_max_versions: dict[int, int] | None = None,
 ) -> str:
     version = force_version or pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -180,6 +183,40 @@ def process_one(
     skip_reason: str | None = None
     stem = ""
     remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
+
+    mid_raw = model.get("id")
+    try:
+        model_id_int: int | None = int(mid_raw) if mid_raw is not None else None
+    except (TypeError, ValueError):
+        model_id_int = None
+
+    if update_only:
+        max_map = local_max_versions if local_max_versions is not None else {}
+        uo_skip = update_only_skip_reason(model_id_int, version_id, max_map)
+        if uo_skip:
+            if job:
+                fields = dict(_model_fields(model, version))
+                if uo_skip == "skip_uptodate" and model_id_int is not None:
+                    fields["localVersionId"] = max_map.get(model_id_int)
+                job.emit(uo_skip, **fields)
+            # Only prune when we already have this (or newer) version locally.
+            if uo_skip == "skip_uptodate" and model_id_int is not None:
+                keep_vid = max_map.get(model_id_int, version_id)
+                maybe_prune_old_versions(
+                    enabled=not keep_old_versions,
+                    dry_run=dry_run,
+                    out_dir=out_dir,
+                    model=model,
+                    version=version,
+                    version_id=keep_vid,
+                    local_blake3=local_blake3,
+                    local_versions=local_versions,
+                    local_stems=local_stems,
+                    logger=logger,
+                    job=job,
+                )
+            return uo_skip
+
     with _index_lock:
         if blake3 and blake3.upper() in local_blake3:
             skip_reason = "skip_hash"
@@ -492,6 +529,11 @@ def process_one(
                 previewPath=str(preview_path) if preview_path is not None else None,
                 **_model_fields(model, version),
             )
+        if local_max_versions is not None and model_id_int is not None:
+            with _index_lock:
+                prev = local_max_versions.get(model_id_int)
+                if prev is None or version_id > prev:
+                    local_max_versions[model_id_int] = version_id
         maybe_prune_old_versions(
             enabled=not keep_old_versions,
             dry_run=False,

@@ -35,6 +35,7 @@ logs/cancel.request.tmp
 logs/pause.request
 logs/pause.request.tmp
 logs/listing-cache/
+logs/filter-presets/
 logs/archive/
 !logs/.gitkeep
 downloads/

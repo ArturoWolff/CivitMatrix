@@ -28,6 +28,12 @@ from civitmatrix.directories_config import (
     path_for_type,
     save_directories,
 )
+from civitmatrix.filter_presets import (
+    FilterPresetError,
+    list_filter_presets,
+    load_filter_preset,
+    save_filter_preset,
+)
 from civitmatrix.model_filters import parse_csv_list, summarize_model_for_ui
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import build_status_snapshot
@@ -42,8 +48,10 @@ MUTATING_POST = {
     "/api/resume",
     "/api/retry-failed",
     "/api/heal",
+    "/api/categorize",
     "/api/directories",
     "/api/browse-dir",
+    "/api/filter-presets",
 }
 
 _run_lock = threading.Lock()
@@ -257,6 +265,15 @@ def _fetch_enums(dirs_path: Path) -> dict[str, Any]:
     return data
 
 
+def _parse_optional_int(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
     if not api_key:
@@ -279,7 +296,18 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
     tag_exclude = parse_csv_list(body.get("tagExclude"))
     category = body.get("category") or None
     users = parse_csv_list(body.get("users"))
+    users_deny = parse_csv_list(body.get("usersDeny"))
     file_format = body.get("format") or None
+    try:
+        min_downloads = max(0, int(body.get("minDownloads") or 0))
+    except (TypeError, ValueError):
+        min_downloads = 0
+    try:
+        min_likes = max(0, int(body.get("minLikes") or 0))
+    except (TypeError, ValueError):
+        min_likes = 0
+    base_only = bool(body.get("baseOnly"))
+    max_nsfw_level = _parse_optional_int(body.get("maxNsfwLevel"))
 
     from civitmatrix.model_filters import is_all_filter
 
@@ -297,10 +325,15 @@ def _populate(body: dict[str, Any], dirs_path: Path) -> dict[str, Any]:
         tag_exclude=tag_exclude,
         category=category,
         users=users,
+        users_deny=users_deny,
         file_format=file_format,
         checkpoint_type=checkpoint_type,
         updated_from=updated_from or None,
         updated_to=updated_to or None,
+        min_downloads=min_downloads,
+        min_likes=min_likes,
+        base_only=base_only,
+        max_nsfw_level=max_nsfw_level,
     ):
         scanned += 1
         items.append(summarize_model_for_ui(model, base_model=summarize_base))
@@ -324,6 +357,17 @@ def _tail_ui_run_log(path: Path, *, max_lines: int = 40) -> str:
     except OSError:
         return ""
     return "\n".join(lines[-max_lines:]).strip()
+
+
+
+def _cli_has_option(flag: str) -> bool:
+    """True if current CLI argparse exposes *flag* (e.g. --categorize)."""
+    from civitmatrix.cli import build_parser
+
+    for action in build_parser()._actions:
+        if flag in (action.option_strings or ()):
+            return True
+    return False
 
 
 def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
@@ -361,7 +405,7 @@ def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CivitMatrixUI/0.2"
+    server_version = "CivitMatrixUI/1.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         try:
@@ -469,6 +513,11 @@ class Handler(BaseHTTPRequestHandler):
             out = self._start_heal(body if isinstance(body, dict) else {}, p)
             _json_response(self, 200 if out.get("ok") else 409, out)
             return
+        if path == "/api/categorize":
+            out = self._start_categorize(body if isinstance(body, dict) else {}, p)
+            code = 200 if out.get("ok") else (404 if out.get("missingCli") else 409)
+            _json_response(self, code, out)
+            return
         if path == "/api/directories":
             saved = save_directories(p["dirs"], body)
             key = body.get("apiKey")
@@ -491,6 +540,15 @@ class Handler(BaseHTTPRequestHandler):
             start = body.get("start")
             start_s = str(start).strip() if isinstance(start, str) and start.strip() else None
             _json_response(self, 200, browse_directory(start_s))
+            return
+        if path == "/api/filter-presets":
+            name = str(body.get("name") or "").strip()
+            try:
+                saved = save_filter_preset(p["logs"], name, body)
+            except FilterPresetError as e:
+                _json_response(self, 400, {"error": str(e)})
+                return
+            _json_response(self, 200, {"ok": True, "preset": saved})
             return
         _json_response(self, 404, {"error": "not found"})
 
@@ -556,10 +614,15 @@ class Handler(BaseHTTPRequestHandler):
             "tagExclude": parse_csv_list(body.get("tagExclude")),
             "category": body.get("category"),
             "users": parse_csv_list(body.get("users")),
+            "usersDeny": parse_csv_list(body.get("usersDeny")),
             "format": body.get("format"),
             "checkpointType": body.get("checkpointType") or "All",
             "updatedFrom": body.get("updatedFrom") or "",
             "updatedTo": body.get("updatedTo") or "",
+            "minDownloads": int(body.get("minDownloads") or 0),
+            "minLikes": int(body.get("minLikes") or 0),
+            "baseOnly": bool(body.get("baseOnly")),
+            "maxNsfwLevel": _parse_optional_int(body.get("maxNsfwLevel")),
             "outDir": str(out_dir),
             "selection": selection,
             "downloadAll": download_all,
@@ -580,6 +643,31 @@ class Handler(BaseHTTPRequestHandler):
             argv.append("--keep-old-versions")
         if body.get("writeSwarm"):
             argv.append("--write-swarm")
+        if body.get("updateOnly"):
+            if not _cli_has_option("--update-only"):
+                return {
+                    "ok": False,
+                    "missingCli": True,
+                    "error": "CLI --update-only is not available in this build yet.",
+                }
+            argv.append("--update-only")
+        return _spawn_run(argv, p["root"])
+
+    def _start_categorize(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
+        if not _cli_has_option("--categorize"):
+            return {
+                "ok": False,
+                "missingCli": True,
+                "error": "CLI --categorize is not available in this build yet.",
+            }
+        dirs = load_directories(p["dirs"])
+        model_type = str(body.get("type") or "LORA")
+        out_dir = path_for_type(dirs, model_type)
+        os.environ["LORA_DIR"] = str(out_dir)
+        argv = ["--cli", "--categorize", "--out", str(out_dir)]
+        # CLI defaults to dry-run plan; --apply performs moves.
+        if body.get("apply"):
+            argv.append("--apply")
         return _spawn_run(argv, p["root"])
 
     def _start_heal(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
@@ -642,6 +730,16 @@ class Handler(BaseHTTPRequestHandler):
                 _json_response(self, 200, _fetch_enums(p["dirs"]))
             except Exception as e:  # noqa: BLE001
                 _json_response(self, 500, {"error": str(e), "BaseModel": ["Anima"]})
+            return
+        if path == "/api/filter-presets":
+            name = (qs.get("name") or [""])[0].strip()
+            if name:
+                try:
+                    _json_response(self, 200, load_filter_preset(p["logs"], name))
+                except FilterPresetError as e:
+                    _json_response(self, 404, {"error": str(e)})
+                return
+            _json_response(self, 200, {"presets": list_filter_presets(p["logs"])})
             return
         _json_response(self, 404, {"error": "not found"})
 

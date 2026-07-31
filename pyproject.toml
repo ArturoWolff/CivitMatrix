@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "civitmatrix"
-version = "0.2.0"
+version = "1.0.0"
 description = "Batch download CivitAI models with Stability Matrix–native sidecars"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ keywords = [
   "stable-diffusion",
 ]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",

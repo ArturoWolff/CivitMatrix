@@ -9,6 +9,11 @@ from typing import Any, Callable
 
 from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.index_health import index_diagnostics, load_cm_info
+from civitmatrix.indexer import (
+    iter_cm_info_paths,
+    iter_weight_paths,
+    relative_pair_stem,
+)
 from civitmatrix.preview_media import finalize_preview_file, find_preview_path, pick_preview_url
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
 
@@ -320,9 +325,14 @@ def heal_library(
             },
         )
 
-    weights = {p.stem: p for p in out_dir.glob("*.safetensors")}
+    # Recursive so SM category subfolders heal; keys are relative pair stems.
+    weights = {
+        relative_pair_stem(out_dir, p): p
+        for p in iter_weight_paths(out_dir, recursive=True)
+    }
     infos = {
-        p.name[: -len(".cm-info.json")]: p for p in out_dir.glob("*.cm-info.json")
+        relative_pair_stem(out_dir, p, cm_info=True): p
+        for p in iter_cm_info_paths(out_dir, recursive=True)
     }
     stems = sorted(set(weights) | set(infos))
 

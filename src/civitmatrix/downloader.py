@@ -24,7 +24,7 @@ from civitmatrix.download_one import (
 )
 from civitmatrix.heal_library import heal_library
 from civitmatrix.index_health import format_index_log_line, index_diagnostics
-from civitmatrix.indexer import load_local_index
+from civitmatrix.indexer import load_local_index, load_local_model_max_versions
 from civitmatrix.job_state import JobState
 from civitmatrix.listing_cache import (
     ListingCacheWriter,
@@ -44,6 +44,15 @@ from civitmatrix.stream_run import run_streaming_pool
 # Re-exports for stable imports
 __all__ = ["process_one", "run_batch", "run_heal", "_resolve_versions"]
 
+SM_REFRESH_HINT = (
+    "Refresh Stability Matrix model index (Models library refresh / rebuild, or restart SM) "
+    "so Installed badges and connected metadata stay accurate."
+)
+
+
+def _emit_sm_refresh_hint(job: JobState, logger: RunLogger) -> None:
+    logger.log(SM_REFRESH_HINT)
+    job.emit("sm_refresh_hint", message=SM_REFRESH_HINT)
 def run_batch(
     *,
     client: CivitClient,
@@ -69,12 +78,18 @@ def run_batch(
     tag_exclude: list[str] | None = None,
     category: str = "",
     users: list[str] | None = None,
+    users_deny: list[str] | None = None,
     file_format: str = "",
     checkpoint_type: str = "All",
     updated_from: str = "",
     updated_to: str = "",
+    min_downloads: int = 0,
+    min_likes: int = 0,
+    base_only: bool = False,
+    max_nsfw_level: int | None = None,
     selection_map: dict[int, list] | None = None,
     write_swarm: bool = False,
+    update_only: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -100,6 +115,7 @@ def run_batch(
         listingCacheHit=False,
         diskFloorGib=float(disk_floor_gib),
         writeSwarm=bool(write_swarm),
+        updateOnly=bool(update_only),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -144,6 +160,13 @@ def run_batch(
             )
 
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
+    local_max_versions = (
+        load_local_model_max_versions(out_dir) if update_only else {}
+    )
+    if update_only:
+        logger.log(
+            f"Update-only: {len(local_max_versions)} installed ModelId(s) under {out_dir}"
+        )
     diag = index_diagnostics(out_dir)
     logger.log(f"{format_index_log_line(diag)} under {out_dir}")
 
@@ -275,6 +298,8 @@ def run_batch(
                     keep_old_versions=keep_old_versions or multi,
                     force_version=ver,
                     write_swarm=write_swarm,
+                    update_only=update_only,
+                    local_max_versions=local_max_versions if update_only else None,
                 )
                 if last in {"cancelled", "disk_full"}:
                     return last
@@ -344,10 +369,15 @@ def run_batch(
             tag_exclude=tag_exclude or [],
             category=category,
             users=users or [],
+            users_deny=users_deny or [],
             file_format=file_format,
             checkpoint_type=checkpoint_type,
             updated_from=updated_from,
             updated_to=updated_to,
+            min_downloads=min_downloads,
+            min_likes=min_likes,
+            base_only=base_only,
+            max_nsfw_level=max_nsfw_level,
             selection_map=selection_map,
         )
 
@@ -418,9 +448,7 @@ def run_batch(
         logger.log(f"Manifest -> {logger.manifest_path}")
         logger.log(f"Job status -> {logger.job_path}")
         logger.log(f"Events -> {job.events_path}")
-        logger.log(
-            "Refresh Stability Matrix model index (or restart SM) to see green Installed labels."
-        )
+        _emit_sm_refresh_hint(job, logger)
         return 0
     except Exception:
         job.emit("run_error")
@@ -448,16 +476,22 @@ def _iter_models_for_run(
     tag_exclude: list[str] | None = None,
     category: str = "",
     users: list[str] | None = None,
+    users_deny: list[str] | None = None,
     file_format: str = "",
     checkpoint_type: str = "All",
     updated_from: str = "",
     updated_to: str = "",
+    min_downloads: int = 0,
+    min_likes: int = 0,
+    base_only: bool = False,
+    max_nsfw_level: int | None = None,
     selection_map: dict[int, list] | None = None,
 ) -> Iterator[dict[str, Any]]:
     logs_dir = logger.job_path.parent
     tag_include = tag_include or []
     tag_exclude = tag_exclude or []
     users = users or []
+    users_deny = users_deny or []
 
     def _passes(model: dict[str, Any]) -> bool:
         return model_passes_filters(
@@ -466,9 +500,15 @@ def _iter_models_for_run(
             tag_exclude=tag_exclude,
             category=category,
             users=users,
+            users_deny=users_deny,
             file_format=file_format,
             updated_from=updated_from or None,
             updated_to=updated_to or None,
+            min_downloads=min_downloads,
+            min_likes=min_likes,
+            base_model=base_model,
+            base_only=base_only,
+            max_nsfw_level=max_nsfw_level,
         )
 
     if retry_failed:
@@ -579,10 +619,15 @@ def _iter_models_for_run(
         tag_exclude=tag_exclude,
         category=category,
         users=users,
+        users_deny=users_deny,
         file_format=file_format,
         checkpoint_type=checkpoint_type,
         updated_from=updated_from or None,
         updated_to=updated_to or None,
+        min_downloads=min_downloads,
+        min_likes=min_likes,
+        base_only=base_only,
+        max_nsfw_level=max_nsfw_level,
         username=username,
         on_page=on_page,
     ):
@@ -702,7 +747,7 @@ def run_heal(
         diag2 = index_diagnostics(out_dir)
         logger.log(f"Heal done. Counts: {json.dumps(counts, sort_keys=True)}")
         logger.log(f"After heal: {format_index_log_line(diag2)}")
-        logger.log("Refresh Stability Matrix model index if Installed badges look stale.")
+        _emit_sm_refresh_hint(job, logger)
         return 0
     except Exception:
         job.emit("run_error")
