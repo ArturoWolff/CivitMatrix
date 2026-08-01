@@ -34,6 +34,113 @@ def civit_model_source_url(
     return f"{base}/models/{model_id}?modelVersionId={version_id}"
 
 
+def _swarm_adapter_suffix(model_type: str | None) -> str | None:
+    """Return Swarm adapter path segment, or None for full checkpoints."""
+    # Default missing type to LORA (matches build_cm_info / typical CivitMatrix installs).
+    t = (model_type if model_type is not None else "LORA").strip().lower()
+    if not t or t in {"checkpoint", "checkpoints"}:
+        return None
+    if t in {"lora", "locon", "dora", "lycoris", "loha", "lokr"}:
+        return "lora"
+    if t in {"controlnet", "control net", "control-net"}:
+        return "controlnet"
+    if t in {"textualinversion", "textual inversion", "embedding", "embeddings"}:
+        return "textual-inversion"
+    return None
+
+
+def _swarm_base_architecture_id(base_model: str | None) -> str | None:
+    """Map Civit BaseModel string to Swarm base architecture id (no adapter)."""
+    if not base_model or not str(base_model).strip():
+        return None
+    raw = str(base_model).strip()
+    key = raw.lower().replace("_", " ")
+    compact = key.replace(" ", "").replace(".", "").replace("-", "")
+
+    if (
+        key == "anima"
+        or key.startswith("anima ")
+        or key.startswith("anima-")
+        or key in {"anima preview", "anima-preview"}
+    ):
+        return "anima"
+
+    if (
+        key in {"sd 1.5", "sd1", "sd1.5", "stable diffusion 1.5", "stable diffusion v1"}
+        or compact in {"sd15", "sd1", "stablediffusion15", "stablediffusionv1"}
+        or key.startswith("sd 1.5")
+    ):
+        return "stable-diffusion-v1"
+
+    # SDXL family (Pony / Illustrious / NoobAI train on SDXL)
+    if any(
+        x in key
+        for x in (
+            "sdxl",
+            "pony",
+            "illustrious",
+            "noobai",
+            "noob ai",
+        )
+    ):
+        return "stable-diffusion-xl-v1-base"
+
+    # Flux — Schnell vs Dev for checkpoints; LoRA remaps Schnell→dev/lora at suffix stage
+    if "flux" in key:
+        if "2" in key and ("klein" in key or "flux.2" in key or "flux 2" in key):
+            return None
+        if (
+            "schnell" in key
+            or key in {"flux.1 s", "flux 1 s", "flux1 s"}
+            or compact in {"flux1s", "fluxs"}
+            or key.endswith(" s")
+        ):
+            return "Flux.1-schnell"
+        return "Flux.1-dev"
+
+    # SD 3 / 3.5 — only clear variants
+    if "3.5" in key or compact.startswith("sd35"):
+        if "large" in key:
+            return "stable-diffusion-v3.5-large"
+        if "medium" in key:
+            return "stable-diffusion-v3.5-medium"
+        return None
+    if key in {"sd 3", "sd3", "stable diffusion 3"} or compact == "sd3":
+        return "stable-diffusion-v3-medium"
+
+    return None
+
+
+def swarm_architecture_for(
+    base_model: str | None, model_type: str | None
+) -> str | None:
+    """
+    Map Civit ``BaseModel`` + ``ModelType`` to a SwarmUI ``modelspec.architecture`` id.
+
+    Returns None when the base is unknown (do not invent).
+    """
+    base_id = _swarm_base_architecture_id(base_model)
+    if base_id is None:
+        return None
+
+    # Flux Schnell LoRAs remap to Flux.1-dev/lora in Swarm; write canonical remapped id.
+    suffix = _swarm_adapter_suffix(model_type)
+    if base_id == "Flux.1-schnell" and suffix == "lora":
+        return "Flux.1-dev/lora"
+    if base_id == "Flux.1-schnell" and suffix == "controlnet":
+        return "Flux.1-dev/controlnet"
+
+    if suffix:
+        # textual-inversion only for arches Swarm registers (SD1/SDXL mainly)
+        if suffix == "textual-inversion" and base_id not in {
+            "stable-diffusion-v1",
+            "stable-diffusion-xl-v1-base",
+        }:
+            return None
+        return f"{base_id}/{suffix}"
+    return base_id
+
+
 def build_cm_info(
     model: dict[str, Any],
     version: dict[str, Any],
@@ -134,7 +241,7 @@ def build_swarm_json(
 
     date = version.get("publishedAt") or utc_now()
 
-    return {
+    payload: dict[str, Any] = {
         "modelspec.title": title,
         "modelspec.description": "".join(desc_parts),
         "modelspec.date": date,
@@ -142,6 +249,10 @@ def build_swarm_json(
         "modelspec.trigger_phrase": trigger,
         "modelspec.tags": tags_joined,
     }
+    arch = swarm_architecture_for(version.get("baseModel"), model.get("type"))
+    if arch:
+        payload["modelspec.architecture"] = arch
+    return payload
 
 
 CATEGORY_TAGS = {

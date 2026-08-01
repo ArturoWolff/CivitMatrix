@@ -16,7 +16,7 @@ For each model version:
 |------|------|
 | `{stem}.safetensors` | Weights (hash identity) |
 | `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags, `SourceUrl`) |
-| `{stem}.swarm.json` | SwarmUI ModelSpec sidecar (Civit link in description; no base64 thumbnails) |
+| `{stem}.swarm.json` | SwarmUI ModelSpec sidecar (Civit link in description; `modelspec.architecture` for class; no base64 thumbnails) |
 | `{stem}.preview.*` | Preview / thumbnail — extension matches content (`.jpeg`, `.png`, `.webp`, `.mp4`, …) |
 
 The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, `SourceUrl`, etc.).
@@ -89,6 +89,20 @@ Seed `logs/manifest.jsonl` from recursive `.cm-info.json` (useful when the folde
 ```
 
 Rows include `modelId`, `versionId`, `blake3`, `localStem`, and `sortHints` from Tags. Duplicate `versionId`s already in the manifest are skipped.
+
+## SwarmUI `modelspec.architecture`
+
+New downloads (with `--write-swarm`) set `modelspec.architecture` from Civit `baseModel` + model `type` (e.g. Anima LoRA → `anima/lora`, SDXL → `stable-diffusion-xl-v1-base/lora`). Swarm reads this from `.swarm.json` and uses it to classify the model.
+
+To fix an existing library **without redownloading weights**:
+
+```bash
+./run.sh --cli --fix-swarm-architecture --dry-run   # counts only
+./run.sh --cli --fix-swarm-architecture             # create/update *.swarm.json
+./run.sh --cli --fix-swarm-architecture --out /path/to/Models/Lora
+```
+
+Reads local `.cm-info.json` `BaseModel` / `ModelType` only (no API). Overwrites wrong architecture values; creates a lean `.swarm.json` when missing. Never touches `.safetensors` or previews. Unknown bases are skipped.
 
 ## Related CLI
 

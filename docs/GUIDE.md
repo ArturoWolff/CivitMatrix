@@ -322,6 +322,15 @@ If index counts don’t match (`blake3` / `versions` / `stems`), some files are 
 # or WRITE_SWARM=1 in .env
 ```
 
+With `--write-swarm`, new `.swarm.json` files include `modelspec.architecture` (mapped from Civit base model + type) so SwarmUI classifies LoRAs correctly (e.g. Anima → `anima/lora`).
+
+To backfill / correct architecture on an existing tree (local `.cm-info.json` only — no API, no weight changes):
+
+```bash
+./run.sh --cli --fix-swarm-architecture --dry-run
+./run.sh --cli --fix-swarm-architecture
+```
+
 GUI: **Write SwarmUI .swarm.json** on Main; **Refresh sidecars on heal** + **Heal library** on Logs.
 
 What it does:

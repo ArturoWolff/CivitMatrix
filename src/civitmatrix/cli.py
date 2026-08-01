@@ -10,6 +10,7 @@ from civitmatrix import __version__
 from civitmatrix.cancel_control import request_cancel_cli
 from civitmatrix.client import CivitClient
 from civitmatrix.downloader import run_batch, run_heal
+from civitmatrix.fix_swarm_architecture import fix_swarm_architecture
 from civitmatrix.strip_swarm_thumbnails import strip_swarm_thumbnails
 from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
@@ -206,6 +207,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--strip-swarm-thumbnails",
         action="store_true",
         help="One-shot: remove modelspec.thumbnail from existing *.swarm.json under out dir",
+    )
+    ctrl.add_argument(
+        "--fix-swarm-architecture",
+        action="store_true",
+        help=(
+            "One-shot: set modelspec.architecture on *.swarm.json from local "
+            ".cm-info.json BaseModel/ModelType (no API, never touches weights)"
+        ),
     )
     ctrl.add_argument(
         "--categorize",
@@ -441,6 +450,23 @@ def main(argv: list[str] | None = None) -> int:
             out_dir = (root / out_dir).resolve()
         counts = strip_swarm_thumbnails(out_dir, dry_run=args.dry_run)
         print(f"strip-swarm-thumbnails: {counts}")
+        return 0
+
+    if args.fix_swarm_architecture:
+        from civitmatrix.directories_config import load_directories, path_for_type
+
+        model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
+        if args.out:
+            out_dir = Path(args.out).expanduser()
+        elif os.environ.get("LORA_DIR"):
+            out_dir = Path(os.environ["LORA_DIR"]).expanduser()
+        else:
+            dirs_cfg = load_directories(logs_dir / "directories.json")
+            out_dir = path_for_type(dirs_cfg, model_type)
+        if not out_dir.is_absolute():
+            out_dir = (root / out_dir).resolve()
+        counts = fix_swarm_architecture(out_dir, dry_run=args.dry_run)
+        print(f"fix-swarm-architecture: {counts}")
         return 0
 
     if args.categorize:

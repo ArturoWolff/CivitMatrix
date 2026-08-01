@@ -179,7 +179,7 @@ YourModels/Lora/
   my-lora.preview.png    # or .jpeg / .webp / .mp4 — sniffed from content
 ```
 
-That matches what SM writes when you download from its browser — so hashes index cleanly and connected metadata (triggers, version ids, etc.) stays available. Optional: `./run.sh --cli --strip-swarm-thumbnails` removes legacy `modelspec.thumbnail` blobs from existing `.swarm.json` files.
+That matches what SM writes when you download from its browser — so hashes index cleanly and connected metadata (triggers, version ids, etc.) stays available. Optional: `./run.sh --cli --strip-swarm-thumbnails` removes legacy `modelspec.thumbnail` blobs; `./run.sh --cli --fix-swarm-architecture` sets SwarmUI `modelspec.architecture` from local `.cm-info.json` (no redownload).
 
 Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 

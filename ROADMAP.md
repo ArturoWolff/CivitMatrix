@@ -20,7 +20,7 @@ Deferred post-1.0: Translations.
 ## v0.1 — shipped
 
 - [x] Cross-platform CLI (`python -m civitmatrix`, `run.sh`, `run.ps1`)
-- [x] Stability Matrix–native sidecars (`.cm-info.json` + preview; `SourceUrl` + `.swarm.json` for SwarmUI)
+- [x] Stability Matrix–native sidecars (`.cm-info.json` + preview; `SourceUrl` + `.swarm.json` with `modelspec.architecture` for SwarmUI)
 - [x] Preview extension from content (JPEG / PNG / WebP / MP4, …)
 - [x] BLAKE3 / version skip + resume
 - [x] `failed.jsonl` + `manifest.jsonl` (with `sortHints`)
