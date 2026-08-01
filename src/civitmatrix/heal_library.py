@@ -10,9 +10,12 @@ from typing import Any, Callable
 from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.index_health import index_diagnostics, load_cm_info
 from civitmatrix.indexer import (
+    WEIGHT_EXTENSIONS,
     iter_cm_info_paths,
     iter_weight_paths,
     relative_pair_stem,
+    weight_path_for_stem,
+    weight_suffix_from_name,
 )
 from civitmatrix.preview_media import finalize_preview_file, find_preview_path, pick_preview_url
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
@@ -93,7 +96,7 @@ def _mark_hash_mismatch_kept(
     h = dict(payload.get("Hashes") or {})
     h["BLAKE3"] = str(local_blake3).upper()
     payload["Hashes"] = h
-    weight = out_dir / f"{stem}.safetensors"
+    weight = weight_path_for_stem(out_dir, stem)
     meta = dict(payload.get("CivitMatrix") or {})
     meta["hashMismatchKept"] = True
     meta["staleRemoteMeta"] = True
@@ -109,7 +112,7 @@ def _mark_hash_mismatch_kept(
         "CDN download bytes do not match API-published BLAKE3; "
         "version API is live; kept complete downloaded weight"
     )
-    if weight.is_file():
+    if weight is not None and weight.is_file():
         meta["downloadSizeBytes"] = weight.stat().st_size
     if fi.get("sizeKB") is not None:
         meta["apiSizeKB"] = fi.get("sizeKB")
@@ -281,14 +284,31 @@ def _ensure_preview(
         return None
 
 
+def _clear_sibling_weights(out_dir: Path, stem: str, *, keep: Path) -> None:
+    """Remove other known weight extensions for the same stem after a replace."""
+    keep_resolved = keep.resolve()
+    for ext in WEIGHT_EXTENSIONS:
+        p = out_dir / f"{stem}{ext}"
+        try:
+            if p.is_file() and p.resolve() != keep_resolved:
+                p.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 def _delete_weight_bundle(out_dir: Path, stem: str, *, dry_run: bool) -> list[str]:
     removed: list[str] = []
-    for p in [
-        out_dir / f"{stem}.safetensors",
+    candidates = [
         out_dir / f"{stem}.cm-info.json",
         out_dir / f"{stem}.swarm.json",
         *out_dir.glob(f"{stem}.preview.*"),
-    ]:
+    ]
+    for ext in WEIGHT_EXTENSIONS:
+        candidates.append(out_dir / f"{stem}{ext}")
+    wp = weight_path_for_stem(out_dir, stem)
+    if wp is not None:
+        candidates.append(wp)
+    for p in candidates:
         if p.is_file() and not p.name.endswith(".partial"):
             removed.append(p.name)
             if not dry_run:
@@ -716,11 +736,13 @@ def _redownload_version(
     download_url = file_info.get("downloadUrl") or (
         f"{client.base_url}/api/download/models/{version_id}"
     )
-    weight_path = out_dir / f"{stem}.safetensors"
+    remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
+    ext = weight_suffix_from_name(str(remote_name))
+    weight_path = out_dir / f"{stem}{ext}"
     if dry_run:
         return "ok"
     # Download beside the existing weight; only replace after BLAKE3 verify.
-    staging = out_dir / f"{stem}.safetensors.heal-new"
+    staging = out_dir / f"{stem}{ext}.heal-new"
     staging.unlink(missing_ok=True)
     try:
         client.download(download_url, staging)
@@ -789,6 +811,7 @@ def _redownload_version(
                 "keeping complete download (stale remote meta)"
             )
             staging.replace(weight_path)
+            _clear_sibling_weights(out_dir, stem, keep=weight_path)
             preview = _ensure_preview(
                 client, version, out_dir, stem, dry_run=False, log=log
             )
@@ -814,6 +837,7 @@ def _redownload_version(
         return "failed"
 
     staging.replace(weight_path)
+    _clear_sibling_weights(out_dir, stem, keep=weight_path)
 
     if not local_hash:
         try:

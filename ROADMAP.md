@@ -84,6 +84,17 @@ Deferred post-1.0: Translations.
 - [x] Post-download BLAKE3 verify against CivitAI file hash  
 - [x] Safe restart mid-catalog without re-downloading verified files (stream + skip/index)
 
+## Maintenance Aug 2026 follow-ups — shipped
+
+From [Maintenance Report - August 2026](docs/superpowers/reports/Maintenance-Report-2026-08.md):
+
+- [x] Default `UNet` out dir → SM `DiffusionModels/` (Comfy `diffusion_models`)  
+- [x] Format-aware destinations (preserve `.gguf` / weight extension; index/heal both)  
+- [x] Civit types `CLIP` / `CLIPVision` / `VisionLanguage` in CLI + UI  
+- [x] Listing pagination: `nextCursor` fallback + HTTP 429 / `Retry-After` backoff  
+- [x] Docs: opt-in `--write-swarm`; FILTERS types/sort notes  
+- [x] Swarm `modelspec.architecture` write + `--fix-swarm-architecture` backfill  
+
 ## QoL forever
 
 - [x] Preflight / free-disk floor (`--disk-floor-gib`, soft size warn, exit 5)  

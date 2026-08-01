@@ -49,6 +49,7 @@ Set `LORA_DIR` (or `--out`) to the folder SM already indexes.
 | macOS | `~/Library/Application Support/...` or your portable `Data/Models/Lora` |
 
 For checkpoints use `Data/Models/StableDiffusion` (and `--type Checkpoint`).  
+For UNet-only / diffusion weights use `Data/Models/DiffusionModels` (API type `UNet`; Comfy folder `diffusion_models`). Existing `Models/UNet` trees are not auto-migrated; saved `logs/directories.json` path overrides keep old folders until you reset them.  
 For LoRA, keep `Data/Models/Lora`.
 
 After a run: **refresh the model index in SM** (or restart the app). Green **Installed** appears when BLAKE3 matches.
@@ -177,7 +178,7 @@ Still images prefer the API image URL; video previews become `.preview.mp4`.
 
 ## Crash leftovers & Range resume
 
-Downloads write to `*.safetensors.partial` then rename into place. If the process dies mid-file, the next run **keeps** that partial and sends `Range: bytes={offset}-` to continue (event `download_resume`). If the server ignores Range (HTTP 200) or returns 416, the client restarts a full download.
+Downloads write to `*{ext}.partial` (e.g. `.safetensors.partial` / `.gguf.partial`) then rename into place. The destination extension matches the remote primary file (`.safetensors`, `.gguf`, `.sft`, or another short suffix). If the process dies mid-file, the next run **keeps** that partial and sends `Range: bytes={offset}-` to continue (event `download_resume`). If the server ignores Range (HTTP 200) or returns 416, the client restarts a full download.
 
 ```bash
 ./run.sh --cli                      # resume weight partials by default

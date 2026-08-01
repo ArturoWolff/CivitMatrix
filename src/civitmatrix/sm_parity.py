@@ -13,6 +13,7 @@ from civitmatrix.indexer import (
     iter_cm_info_paths,
     iter_weight_paths,
     relative_pair_stem,
+    weight_path_for_stem,
 )
 from civitmatrix.logging_io import utc_now
 from civitmatrix.sm_sidecars import sort_hints_from_tags
@@ -281,7 +282,10 @@ def import_sm_manifest(
             "blake3": blake3,
             "localStem": stem,
             "infoPath": str(info_path),
-            "weightPath": str(info_path.parent / f"{cm_info_basename_stem(info_path)}.safetensors"),
+            "weightPath": str(
+                weight_path_for_stem(out_dir, stem)
+                or (info_path.parent / f"{cm_info_basename_stem(info_path)}.safetensors")
+            ),
             "tags": [t for t in tags if t],
             "creator": data.get("AuthorUsername"),
             "sortHints": sort_hints_from_tags(tags if isinstance(tags, list) else []),

@@ -33,6 +33,11 @@ class DownloadOneSafetyTests(unittest.TestCase):
         self.assertIn("keeping verified weight", src)
         self.assertIn("if not weight_committed:", src)
 
+    def test_process_one_preserves_remote_weight_extension(self) -> None:
+        src = inspect.getsource(download_one.process_one)
+        self.assertIn("weight_suffix_from_name", src)
+        self.assertIn('f"{stem}{ext}"', src)
+
 
 if __name__ == "__main__":
     unittest.main()

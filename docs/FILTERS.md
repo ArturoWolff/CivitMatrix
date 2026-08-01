@@ -29,12 +29,21 @@ UI Main view exposes the same filter dimensions (Populate preview + Start / Down
 
 ### Sort values
 
-`Highest Rated` · `Most Downloaded` · `Newest` · `Most Liked` · `Most Discussed` · `Most Collected` · `Most Buzz`
+`Highest Rated` · `Most Downloaded` · `Newest` · `Most Liked` · `Most Discussed` · `Most Collected` · `Most Images` · `Oldest`
+
+(Site Meilisearch labels like “Most Buzz” / “Relevancy” are **not** REST `--sort` values.)
 
 ### Model types (common)
 
-`LORA` · `LoCon` · `DoRA` · `Checkpoint` · `VAE` · `TextualInversion` · …
+`LORA` · `LoCon` · `DoRA` · `Checkpoint` · `VAE` · `TextualInversion` · `UNet` · `CLIP` · `CLIPVision` · `VisionLanguage` · `TextEncoder` · `LLM` · …
 
+### Base models (examples)
+
+`Anima` · `Flux.2` · `ZImageTurbo` · `SDXL` · `Pony` · … (live list from `/api/v1/enums` → `ActiveBaseModel`)
+
+### Formats
+
+`--format` can select SafeTensor, GGUF, PickleTensor, etc. GGUF (and other non-SafeTensor) weights are indexed and saved with their real extension beside `.cm-info.json`.
 ### Important nuance
 
 `baseModels=Anima` (API) means “has **at least one** Anima version,” not “Anima-only.”  

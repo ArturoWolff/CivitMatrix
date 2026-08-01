@@ -9,14 +9,55 @@ SAFE_NAME_RE = re.compile(r"[^\w.\-@()+\[\] ]+", re.UNICODE)
 WS_RE = re.compile(r"\s+")
 CM_INFO_SUFFIX = ".cm-info.json"
 
+# Indexed / resolvable weight extensions (order = preference for lookup).
+WEIGHT_EXTENSIONS = (".safetensors", ".gguf", ".sft")
+KNOWN_WEIGHT_SUFFIXES = frozenset(WEIGHT_EXTENSIONS)
+
 
 def sanitize_stem(name: str, max_len: int = 120) -> str:
-    name = name.strip().removesuffix(".safetensors")
+    name = name.strip()
+    lower = name.lower()
+    for suf in WEIGHT_EXTENSIONS:
+        if lower.endswith(suf):
+            name = name[: -len(suf)]
+            break
     name = SAFE_NAME_RE.sub("_", name)
     name = WS_RE.sub(" ", name).strip(" ._")
     if not name:
         name = "model"
     return name[:max_len]
+
+
+def weight_suffix_from_name(remote_name: str) -> str:
+    """
+    Destination extension from a remote file name.
+
+    Prefer known weight suffixes; otherwise keep a short alphanumeric suffix
+    that looks like an extension; default ``.safetensors``.
+    """
+    suffix = Path(remote_name or "").suffix
+    if not suffix:
+        return ".safetensors"
+    lower = suffix.lower()
+    if lower in KNOWN_WEIGHT_SUFFIXES:
+        return lower
+    body = suffix[1:] if suffix.startswith(".") else suffix
+    if body and len(suffix) <= 12 and body.replace("_", "").isalnum():
+        return lower if suffix.startswith(".") else f".{lower}"
+    return ".safetensors"
+
+
+def weight_path_for_stem(out_dir: Path, stem: str) -> Path | None:
+    """
+    Resolve the weight file beside ``stem`` (may be nested, e.g. ``char/foo``).
+
+    Prefers ``.safetensors``, then ``.gguf``, then ``.sft``.
+    """
+    for ext in WEIGHT_EXTENSIONS:
+        p = out_dir / f"{stem}{ext}"
+        if p.is_file():
+            return p
+    return None
 
 
 def _is_under(out_dir: Path, path: Path) -> bool:
@@ -38,7 +79,7 @@ def relative_pair_stem(out_dir: Path, path: Path, *, cm_info: bool = False) -> s
     Unique pairing key relative to ``out_dir`` (posix).
 
     Flat: ``foo``. Nested: ``character/foo``. Use with
-    ``out_dir / f"{key}.safetensors"`` / ``.cm-info.json``.
+    ``weight_path_for_stem`` / ``.cm-info.json``.
     """
     name = cm_info_basename_stem(path) if cm_info else path.stem
     rel_parent = path.parent.relative_to(out_dir)
@@ -48,11 +89,14 @@ def relative_pair_stem(out_dir: Path, path: Path, *, cm_info: bool = False) -> s
 
 
 def iter_weight_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
-    """List ``*.safetensors`` under ``out_dir`` (flat glob or recursive rglob)."""
+    """List ``*.safetensors`` / ``*.gguf`` under ``out_dir`` (flat or recursive)."""
     if not out_dir.is_dir():
         return []
-    paths = out_dir.rglob("*.safetensors") if recursive else out_dir.glob("*.safetensors")
-    return sorted(p for p in paths if p.is_file() and _is_under(out_dir, p))
+    found: list[Path] = []
+    for pattern in ("*.safetensors", "*.gguf"):
+        paths = out_dir.rglob(pattern) if recursive else out_dir.glob(pattern)
+        found.extend(p for p in paths if p.is_file() and _is_under(out_dir, p))
+    return sorted(set(found))
 
 
 def iter_cm_info_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
@@ -75,8 +119,9 @@ def load_local_index(
     """
     Return (blake3_upper, version_ids, existing_stems_lower).
 
-    Skip sets only include *complete* installs: non-empty ``*.safetensors`` plus a
-    matching ``*.cm-info.json`` that has both VersionId and Hashes.BLAKE3.
+    Skip sets only include *complete* installs: non-empty weight
+    (``.safetensors`` / ``.gguf``) plus a matching ``*.cm-info.json`` that has
+    both VersionId and Hashes.BLAKE3.
     Orphan info/weight (or incomplete sidecars) still reserve stems for naming
     but never count as already-installed — so the next run will re-fetch/heal
     instead of faking Stability Matrix Installed.

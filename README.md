@@ -34,7 +34,7 @@ CivitMatrix:
 1. Lists models from the CivitAI API (any base model / type — Anima LoRAs are the showcase default)
 2. Picks the newest version that matches your base model
 3. Downloads weights into your SM Models folder
-4. Writes **SM-native sidecars**: `.cm-info.json` (with `SourceUrl`) + `.swarm.json` + preview (extension matches real media type)
+4. Writes **SM-native sidecars**: `.cm-info.json` (with `SourceUrl`) + preview (extension matches real media type); optional `.swarm.json` with `--write-swarm` / `WRITE_SWARM=1`
 5. Skips what you already have; logs failures for later retries
 6. Opens a **local Win95 batch UI** by default (`127.0.0.1`) and exposes a **live control plane** (`job.json`, cancel / pause / status) for long CLI runs
 
@@ -47,9 +47,9 @@ flowchart LR
   A[CivitAI API] --> B[List + filter]
   B --> C{Already have BLAKE3?}
   C -->|yes| D[Skip]
-  C -->|no| E[Download safetensors]
-  E --> F[Write .cm-info.json + .swarm.json]
-  F --> G[Write preview]
+  C -->|no| E[Download weight]
+  E --> F[Write .cm-info.json]
+  F --> G[Write preview / optional .swarm.json]
   G --> H[SM index refresh]
   H --> I[Green Installed]
 ```
@@ -173,9 +173,9 @@ Downloads land as:
 
 ```text
 YourModels/Lora/
-  my-lora.safetensors
+  my-lora.safetensors    # or .gguf when that is the primary file
   my-lora.cm-info.json   # SourceUrl → Civit model page
-  my-lora.swarm.json     # SwarmUI ModelSpec (lean; no thumbnails)
+  my-lora.swarm.json     # optional: --write-swarm / WRITE_SWARM=1
   my-lora.preview.png    # or .jpeg / .webp / .mp4 — sniffed from content
 ```
 
@@ -197,7 +197,7 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
 | `<out>/.civitmatrix.lock` | One writer per output folder |
 
-On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
+On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` / `*.gguf.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
 
 Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart (recursive scan of the out dir, including SM category subfolders).
 

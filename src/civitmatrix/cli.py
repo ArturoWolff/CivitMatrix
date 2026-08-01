@@ -32,6 +32,8 @@ TYPE_CHOICES = [
     "All",
     "AestheticGradient",
     "Checkpoint",
+    "CLIP",
+    "CLIPVision",
     "Controlnet",
     "Detection",
     "DoRA",
@@ -47,6 +49,7 @@ TYPE_CHOICES = [
     "UNet",
     "Upscaler",
     "VAE",
+    "VisionLanguage",
     "Wildcards",
     "Workflows",
 ]

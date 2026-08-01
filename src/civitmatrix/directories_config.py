@@ -24,7 +24,10 @@ DEFAULT_TYPE_DIRS = {
     "Wildcards": "Wildcards",
     "Detection": "Detection",
     "TextEncoder": "TextEncoders",
-    "UNet": "UNet",
+    "UNet": "DiffusionModels",
+    "CLIPVision": "ClipVision",
+    "CLIP": "TextEncoders",
+    "VisionLanguage": "VLM",
     "LLM": "VLM",
     "Other": "Other",
 }

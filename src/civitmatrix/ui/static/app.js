@@ -30,6 +30,9 @@ const DIR_KEYS = [
   "Detection",
   "TextEncoder",
   "UNet",
+  "CLIPVision",
+  "CLIP",
+  "VisionLanguage",
   "LLM",
   "Other",
 ];
@@ -52,7 +55,10 @@ const SM_SUBDIRS = {
   Wildcards: "Wildcards",
   Detection: "Detection",
   TextEncoder: "TextEncoders",
-  UNet: "UNet",
+  UNet: "DiffusionModels",
+  CLIPVision: "ClipVision",
+  CLIP: "TextEncoders",
+  VisionLanguage: "VLM",
   LLM: "VLM",
   Other: "Other",
 };

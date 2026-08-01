@@ -114,6 +114,51 @@ class LocalIndexPairingTests(unittest.TestCase):
             self.assertEqual(flat_v, set())
             self.assertEqual(flat_stems, set())
 
+    def test_gguf_weight_pair_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "flux-q4.gguf").write_bytes(b"gguf-weight")
+            (root / "flux-q4.cm-info.json").write_text(
+                json.dumps(
+                    {
+                        "VersionId": 99,
+                        "ModelId": 5,
+                        "Hashes": {"BLAKE3": "ggufhash"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blake3, versions, stems = load_local_index(root)
+            self.assertIn("GGUFHASH", blake3)
+            self.assertIn(99, versions)
+            self.assertIn("flux-q4", stems)
+
+
+class WeightPathHelpersTests(unittest.TestCase):
+    def test_weight_suffix_from_name(self) -> None:
+        from civitmatrix.indexer import weight_suffix_from_name
+
+        self.assertEqual(weight_suffix_from_name("a.safetensors"), ".safetensors")
+        self.assertEqual(weight_suffix_from_name("model.gguf"), ".gguf")
+        self.assertEqual(weight_suffix_from_name("x.sft"), ".sft")
+        self.assertEqual(weight_suffix_from_name("noext"), ".safetensors")
+        self.assertEqual(weight_suffix_from_name("weird.onnx"), ".onnx")
+
+    def test_weight_path_for_stem_prefers_safetensors(self) -> None:
+        from civitmatrix.indexer import weight_path_for_stem
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x.gguf").write_bytes(b"g")
+            (root / "x.safetensors").write_bytes(b"s")
+            self.assertEqual(weight_path_for_stem(root, "x").name, "x.safetensors")
+
+    def test_sanitize_stem_strips_gguf(self) -> None:
+        from civitmatrix.indexer import sanitize_stem
+
+        self.assertEqual(sanitize_stem("My Model.gguf"), "My Model")
+        self.assertEqual(sanitize_stem("My Model.safetensors"), "My Model")
+
 
 if __name__ == "__main__":
     unittest.main()

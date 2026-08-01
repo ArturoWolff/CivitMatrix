@@ -7,7 +7,12 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
-from civitmatrix.indexer import iter_cm_info_paths, relative_pair_stem
+from civitmatrix.indexer import (
+    WEIGHT_EXTENSIONS,
+    iter_cm_info_paths,
+    relative_pair_stem,
+    weight_path_for_stem,
+)
 from civitmatrix.preview_media import find_preview_path
 
 
@@ -64,13 +69,17 @@ def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
     """Delete weight, cm-info, previews, and download temps for stem."""
     removed: list[Path] = []
     paths: list[Path] = [
-        out_dir / f"{stem}.safetensors",
-        out_dir / f"{stem}.safetensors.partial",
         out_dir / f"{stem}.cm-info.json",
         out_dir / f"{stem}.swarm.json",
         out_dir / f"{stem}.preview.download",
         out_dir / f"{stem}.preview.download.partial",
     ]
+    for ext in WEIGHT_EXTENSIONS:
+        paths.append(out_dir / f"{stem}{ext}")
+        paths.append(out_dir / f"{stem}{ext}.partial")
+    wp = weight_path_for_stem(out_dir, stem)
+    if wp is not None and wp not in paths:
+        paths.append(wp)
     preview = find_preview_path(out_dir, stem)
     if preview is not None:
         paths.append(preview)

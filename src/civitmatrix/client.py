@@ -60,10 +60,27 @@ class CivitClient:
         qs["token"] = [self.api_key]
         return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
-    def get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        r = self.session.get(url, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+    def get_json(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        *,
+        max_retries: int = 5,
+    ) -> dict[str, Any]:
+        """GET JSON with retries on HTTP 429 (honors Retry-After when present)."""
+        last: Any = None
+        for attempt in range(max_retries + 1):
+            r = self.session.get(url, params=params, timeout=self.timeout)
+            last = r
+            if r.status_code == 429 and attempt < max_retries:
+                delay = _retry_after_seconds(r, attempt)
+                time.sleep(delay)
+                continue
+            r.raise_for_status()
+            return r.json()
+        assert last is not None
+        last.raise_for_status()
+        return last.json()
 
     def iter_models(
         self,
@@ -80,7 +97,8 @@ class CivitClient:
     ) -> Iterator[dict[str, Any]]:
         from civitmatrix.model_filters import is_all_filter
 
-        url = f"{self.base_url}/api/v1/models"
+        models_url = f"{self.base_url}/api/v1/models"
+        url = models_url
         params: dict[str, Any] = {
             "nsfw": "true" if nsfw else "false",
             "limit": page_limit,
@@ -96,22 +114,28 @@ class CivitClient:
             params["username"] = username
         if tag:
             params["tag"] = tag
+        base_params = dict(params)
         page_num = 0
         while True:
             data = self.get_json(url, params=params)
             items = list(data.get("items") or [])
             meta = data.get("metadata") or {}
             next_page = meta.get("nextPage")
+            next_cursor = meta.get("nextCursor")
             page_num += 1
             if on_page is not None:
                 on_page(page=page_num, next_page=next_page, items=items)
             for item in items:
                 yield item
-            if not next_page:
+            if next_page:
+                assert_same_origin(str(next_page), self.base_url)
+                url = str(next_page)
+                params = None
+            elif next_cursor:
+                url = models_url
+                params = {**base_params, "cursor": str(next_cursor)}
+            else:
                 break
-            assert_same_origin(str(next_page), self.base_url)
-            url = str(next_page)
-            params = None
             time.sleep(0.35)
 
     def get_model(self, model_id: int) -> dict[str, Any]:
@@ -253,6 +277,17 @@ class CivitClient:
                 if attempt == max_retries:
                     raise
                 time.sleep(min(2**attempt, 30))
+
+
+def _retry_after_seconds(response: Any, attempt: int) -> float:
+    """Parse Retry-After (seconds) or fall back to exponential backoff."""
+    raw = response.headers.get("Retry-After") if response is not None else None
+    if raw is not None:
+        try:
+            return max(0.0, float(str(raw).strip()))
+        except ValueError:
+            pass
+    return float(min(2**attempt, 60))
 
 
 def _file_size(path: Path) -> int:

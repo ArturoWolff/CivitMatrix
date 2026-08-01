@@ -17,6 +17,7 @@ from civitmatrix.indexer import (
     pick_primary_file,
     unique_stem,
     update_only_skip_reason,
+    weight_suffix_from_name,
 )
 from civitmatrix.job_state import JobState
 from civitmatrix.logging_io import RunLogger, utc_now
@@ -250,7 +251,8 @@ def process_one(
         )
         return skip_reason
 
-    weight_path = out_dir / f"{stem}.safetensors"
+    ext = weight_suffix_from_name(str(remote_name))
+    weight_path = out_dir / f"{stem}{ext}"
     info_path = out_dir / f"{stem}.cm-info.json"
     preview_tmp = out_dir / f"{stem}.preview.download"
     preview_path: Path | None = None

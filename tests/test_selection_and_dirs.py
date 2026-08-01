@@ -139,6 +139,16 @@ class DirectoriesConfigTests(unittest.TestCase):
         self.assertEqual(str(path_for_type(cfg, "LORA")), "/tmp/Lora")
         self.assertEqual(str(path_for_type(cfg, "LoCon")), "/tmp/Lora")
 
+    def test_default_unet_path_is_diffusion_models(self):
+        from civitmatrix.directories_config import DEFAULT_TYPE_DIRS, default_directories
+
+        self.assertEqual(DEFAULT_TYPE_DIRS["UNet"], "DiffusionModels")
+        with tempfile.TemporaryDirectory() as td:
+            cfg = default_directories(Path(td))
+            unet = Path(cfg["paths"]["UNet"])
+            self.assertEqual(unet.name, "DiffusionModels")
+            self.assertTrue(str(unet).endswith("DiffusionModels"))
+
 
 if __name__ == "__main__":
     unittest.main()

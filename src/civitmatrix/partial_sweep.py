@@ -12,17 +12,23 @@ def iter_stale_partials(
 ) -> list[Path]:
     """
     Non-recursive temps in out_dir.
-    By default keeps ``*.safetensors.partial`` for HTTP Range resume;
-    still collects preview download temps and other ``*.partial`` junk.
+    By default keeps weight ``*.partial`` temps (``.safetensors.partial``,
+    ``.gguf.partial``, ``.sft.partial``) for HTTP Range resume; still collects
+    preview download temps and other ``*.partial`` junk.
     """
     if not out_dir.is_dir():
         return []
+    _weight_partial_suffixes = (
+        ".safetensors.partial",
+        ".gguf.partial",
+        ".sft.partial",
+    )
     found: list[Path] = []
     for p in out_dir.iterdir():
         if not p.is_file():
             continue
         name = p.name
-        if keep_weight_partials and name.endswith(".safetensors.partial"):
+        if keep_weight_partials and name.endswith(_weight_partial_suffixes):
             continue
         if ".preview.download" in name:
             found.append(p)

@@ -8,36 +8,42 @@ SM maintains a local model index of file **BLAKE3** hashes. When the CivitAI bro
 
 You do **not** need to download through SM’s UI. Dropping the correct weight file into the Models tree and refreshing the index is enough for the badge.
 
-## What CivitMatrix writes
-
-For each model version:
-
-| File | Role |
-|------|------|
-| `{stem}.safetensors` | Weights (hash identity) |
-| `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags, `SourceUrl`) |
-| `{stem}.swarm.json` | SwarmUI ModelSpec sidecar (Civit link in description; `modelspec.architecture` for class; no base64 thumbnails) |
-| `{stem}.preview.*` | Preview / thumbnail — extension matches content (`.jpeg`, `.png`, `.webp`, `.mp4`, …) |
-
-The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, `SourceUrl`, etc.).
-
 ## Folder map
 
 ```text
 StabilityMatrix/Data/Models/
   Lora/                 ← --type LORA (default)
   StableDiffusion/      ← --type Checkpoint
+  DiffusionModels/      ← --type UNet (Comfy: models/diffusion_models)
+  ClipVision/           ← --type CLIPVision
+  TextEncoders/         ← --type CLIP / TextEncoder
+  VLM/                  ← --type VisionLanguage / LLM
   VAE/
   ...
 ```
 
 Point `--out` / `LORA_DIR` at the matching folder for the type you download.
 
+**UNet → DiffusionModels:** the default type path for API type `UNet` is SM’s `DiffusionModels` folder (ComfyUI `diffusion_models`). Existing trees under `Models/UNet` are **not** moved automatically. If you already saved paths in `logs/directories.json`, those overrides keep the old folder until you reset/edit them in the UI Directories view.
+
+## What CivitMatrix writes
+
+For each model version:
+
+| File | Role |
+|------|------|
+| `{stem}.safetensors` / `{stem}.gguf` | Weights (hash identity; extension matches the remote primary file) |
+| `{stem}.cm-info.json` | Connected metadata (model/version ids, triggers, hashes, tags, `SourceUrl`) |
+| `{stem}.swarm.json` | **Opt-in** SwarmUI ModelSpec (`--write-swarm` / `WRITE_SWARM`); Civit link + `modelspec.architecture`; no base64 thumbnails |
+| `{stem}.preview.*` | Preview / thumbnail — extension matches content (`.jpeg`, `.png`, `.webp`, `.mp4`, …) |
+
+The `.cm-info.json` shape mirrors SM’s connected-metadata format (`ModelId`, `VersionId`, `Hashes.BLAKE3`, `TrainedWords`, `SourceUrl`, etc.).
+
 ## Skip / resume behavior
 
 On startup CivitMatrix scans the output directory **recursively** for:
 
-- existing `.safetensors` stems (basename reserved for naming)
+- existing weight stems (``.safetensors`` / ``.gguf``; basename reserved for naming)
 - BLAKE3 + `VersionId` from complete pairs (weight + matching `.cm-info.json` in the **same** directory)
 
 Already-present hashes/versions are skipped — including installs under SM category subfolders — safe to re-run after interruptions.
