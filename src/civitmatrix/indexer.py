@@ -89,14 +89,26 @@ def relative_pair_stem(out_dir: Path, path: Path, *, cm_info: bool = False) -> s
 
 
 def iter_weight_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
-    """List ``*.safetensors`` / ``*.gguf`` under ``out_dir`` (flat or recursive)."""
+    """List known weight files under ``out_dir`` (flat or recursive).
+
+    Scans ``WEIGHT_EXTENSIONS`` (``.safetensors``, ``.gguf``, ``.sft``). When
+    several extensions share a stem, the earlier extension wins so skip/heal
+    pairing matches ``weight_path_for_stem``.
+    """
     if not out_dir.is_dir():
         return []
-    found: list[Path] = []
-    for pattern in ("*.safetensors", "*.gguf"):
-        paths = out_dir.rglob(pattern) if recursive else out_dir.glob(pattern)
-        found.extend(p for p in paths if p.is_file() and _is_under(out_dir, p))
-    return sorted(set(found))
+    by_key: dict[tuple[Path, str], Path] = {}
+    globber = out_dir.rglob if recursive else out_dir.glob
+    for ext in WEIGHT_EXTENSIONS:
+        for p in globber(f"*{ext}"):
+            if not p.is_file() or not _is_under(out_dir, p):
+                continue
+            if p.suffix.lower() != ext:
+                continue
+            key = (p.parent, p.stem)
+            if key not in by_key:
+                by_key[key] = p
+    return sorted(by_key.values(), key=lambda p: str(p).lower())
 
 
 def iter_cm_info_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
@@ -120,7 +132,7 @@ def load_local_index(
     Return (blake3_upper, version_ids, existing_stems_lower).
 
     Skip sets only include *complete* installs: non-empty weight
-    (``.safetensors`` / ``.gguf``) plus a matching ``*.cm-info.json`` that has
+    (``.safetensors`` / ``.gguf`` / ``.sft``) plus a matching ``*.cm-info.json`` that has
     both VersionId and Hashes.BLAKE3.
     Orphan info/weight (or incomplete sidecars) still reserve stems for naming
     but never count as already-installed — so the next run will re-fetch/heal

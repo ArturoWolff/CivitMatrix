@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from civitmatrix.indexer import CM_INFO_SUFFIX, iter_weight_paths
+from civitmatrix.preview_media import iter_preview_paths
 from civitmatrix.sm_sidecars import sort_hints_from_tags
 
 BUCKETS = ("characters", "styles", "concepts", "clothes", "uncategorized")
@@ -68,12 +69,9 @@ def _bundle_paths(weight: Path) -> list[Path]:
     swarm = parent / f"{stem}.swarm.json"
     if swarm.is_file():
         paths.append(swarm)
-    for p in sorted(parent.glob(f"{stem}.preview.*")):
-        if not p.is_file():
-            continue
-        if p.name.endswith(".partial"):
-            continue
-        paths.append(p)
+    for p in iter_preview_paths(parent, stem):
+        if p not in paths:
+            paths.append(p)
     return paths
 
 
@@ -154,17 +152,34 @@ def apply_categorize(
             continue
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
+            src_files: list[Path] = []
             for raw in path_strs:
                 src = Path(raw)
-                if not src.is_file():
-                    continue
+                if src.is_file():
+                    src_files.append(src)
+            if not src_files:
+                counts["skipped"] += 1
+                continue
+            for src in src_files:
                 dest = dest_dir / src.name
                 if dest.resolve() == src.resolve():
                     continue
                 if dest.exists():
                     raise FileExistsError(f"destination exists: {dest}")
-                shutil.move(str(src), str(dest))
-                counts["files"] += 1
+            moved: list[tuple[Path, Path]] = []
+            try:
+                for src in src_files:
+                    dest = dest_dir / src.name
+                    if dest.resolve() == src.resolve():
+                        continue
+                    shutil.move(str(src), str(dest))
+                    moved.append((src, dest))
+                    counts["files"] += 1
+            except OSError:
+                for src, dest in reversed(moved):
+                    if dest.is_file() and not src.exists():
+                        shutil.move(str(dest), str(src))
+                raise
             counts["moved"] += 1
         except OSError:
             counts["errors"] += 1

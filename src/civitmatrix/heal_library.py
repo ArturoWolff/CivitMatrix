@@ -17,8 +17,14 @@ from civitmatrix.indexer import (
     weight_path_for_stem,
     weight_suffix_from_name,
 )
-from civitmatrix.preview_media import finalize_preview_file, find_preview_path, pick_preview_url
+from civitmatrix.preview_media import (
+    finalize_preview_file,
+    find_preview_path,
+    iter_preview_paths,
+    pick_preview_url,
+)
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
+from civitmatrix.version_prune import collapse_stem_collisions
 
 LogFn = Callable[[str], None]
 BuildCmFn = Callable[..., dict[str, Any]]
@@ -42,6 +48,40 @@ def _remote_unavailable(cm: dict[str, Any] | None) -> bool:
         return False
     meta = cm.get("CivitMatrix")
     return isinstance(meta, dict) and bool(meta.get("remoteUnavailable"))
+
+
+def _hash_unresolved(cm: dict[str, Any] | None) -> bool:
+    if not cm:
+        return False
+    meta = cm.get("CivitMatrix")
+    return isinstance(meta, dict) and bool(meta.get("hashUnresolved"))
+
+
+def _mark_hash_unresolved(
+    out_dir: Path,
+    stem: str,
+    cm: dict[str, Any] | None,
+    *,
+    local_blake3: str | None,
+    dry_run: bool,
+) -> None:
+    """Record that by-hash lookup failed so later heals skip this weight."""
+    from civitmatrix.logging_io import utc_now
+
+    if dry_run:
+        return
+    info_path = out_dir / f"{stem}.cm-info.json"
+    payload: dict[str, Any] = dict(cm) if isinstance(cm, dict) else {}
+    if local_blake3:
+        hashes = dict(payload.get("Hashes") or {})
+        hashes["BLAKE3"] = str(local_blake3).upper()
+        payload["Hashes"] = hashes
+    meta = dict(payload.get("CivitMatrix") or {})
+    meta["hashUnresolved"] = True
+    meta["hashUnresolvedReason"] = "hash not on CivitAI"
+    meta["hashUnresolvedAt"] = utc_now()
+    payload["CivitMatrix"] = meta
+    _write_sidecar(info_path, payload, dry_run=False)
 
 
 def _hash_mismatch_kept(cm: dict[str, Any] | None) -> bool:
@@ -301,7 +341,7 @@ def _delete_weight_bundle(out_dir: Path, stem: str, *, dry_run: bool) -> list[st
     candidates = [
         out_dir / f"{stem}.cm-info.json",
         out_dir / f"{stem}.swarm.json",
-        *out_dir.glob(f"{stem}.preview.*"),
+        *iter_preview_paths(out_dir, stem),
     ]
     for ext in WEIGHT_EXTENSIONS:
         candidates.append(out_dir / f"{stem}{ext}")
@@ -345,6 +385,26 @@ def heal_library(
             },
         )
 
+    def bump(key: str) -> None:
+        counts[key] = counts.get(key, 0) + 1
+        if job:
+            job.set_count(key, counts[key])
+            job.set_count("processed", sum(counts.values()))
+
+    for cand in collapse_stem_collisions(out_dir, dry_run=dry_run):
+        extra = str(cand.get("stem"))
+        keep = cand.get("keepStem")
+        log(f"HEAL collapsed duplicate stem={extra} keep={keep}")
+        bump("heal_collapsed_duplicate")
+        if job:
+            job.emit(
+                "heal_collapsed_duplicate",
+                stem=extra,
+                keepStem=keep,
+                versionId=cand.get("versionId"),
+                dryRun=dry_run,
+            )
+
     # Recursive so SM category subfolders heal; keys are relative pair stems.
     weights = {
         relative_pair_stem(out_dir, p): p
@@ -355,12 +415,6 @@ def heal_library(
         for p in iter_cm_info_paths(out_dir, recursive=True)
     }
     stems = sorted(set(weights) | set(infos))
-
-    def bump(key: str) -> None:
-        counts[key] = counts.get(key, 0) + 1
-        if job:
-            job.set_count(key, counts[key])
-            job.set_count("processed", sum(counts.values()))
 
     for stem in stems:
         if cancel_check and cancel_check():
@@ -374,6 +428,8 @@ def heal_library(
             job.set_current({"id": None, "name": stem})
 
         weight = weights.get(stem)
+        if weight is None:
+            weight = weight_path_for_stem(out_dir, stem)
         info_path = infos.get(stem)
         cm = load_cm_info(info_path) if info_path else None
 
@@ -403,6 +459,14 @@ def heal_library(
                     )
                     _bump_redownload_result(bump, status)
                 continue
+
+        if (
+            weight is not None
+            and _hash_unresolved(cm)
+            and not refresh_sidecars
+        ):
+            bump("heal_unresolved_kept")
+            continue
 
         if weight is None and info_path is not None:
             version_id = cm.get("VersionId") if cm else None
@@ -543,6 +607,13 @@ def heal_library(
 
         if version is None:
             log(f"HEAL unresolved (hash not on CivitAI) stem={stem}")
+            _mark_hash_unresolved(
+                out_dir,
+                stem,
+                cm,
+                local_blake3=local_hash,
+                dry_run=dry_run,
+            )
             bump("heal_unresolved")
             if job:
                 job.emit("heal_unresolved", stem=stem, blake3=local_hash)

@@ -32,7 +32,7 @@ Deferred post-1.0: Translations.
 - [x] Cooperative `--pause` / `--resume`
 - [x] `--status` / `--status --json` with stable exit codes
 - [x] On start: purge stale `*.partial` / preview download temps (`--keep-partials` to skip)
-- [x] `--heal` library consolidate (BLAKE3 by-hash sidecars, orphan purge, bad-weight repair; `remoteUnavailable` / `hashMismatchKept` stop redownload thrash)
+- [x] `--heal` library consolidate (BLAKE3 by-hash sidecars, orphan purge, bad-weight repair; `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stop redownload thrash; index `.sft`; collapse unique-stem duplicates of the same version)
 - [x] Richer local index log (missingBlake3 / orphanInfo / …)
 - [x] HTTP Range resume for interrupted weight downloads
 - [x] Post-download BLAKE3 verify (`--skip-verify` to opt out)

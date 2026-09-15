@@ -341,9 +341,13 @@ What it does:
    (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
 3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3; sets `SourceUrl` when ids are known); writes `.swarm.json` only with `--write-swarm`; fetches a preview when missing
 4. With `--refresh-sidecars`, also re-fetches and rewrites complete installs that already have ModelId/VersionId
-5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): stage re-download + verify — never delete the existing weight on failure. If CDN bytes never match the published BLAKE3 but the version API is live, heal keeps the complete download, writes sidecars, and sets `CivitMatrix.hashMismatchKept` / `staleRemoteMeta` / `localBlake3` so later heals skip redownload thrash (same idea as `remoteUnavailable` for 404s). `remoteUnavailable` / `hashMismatchKept` stems are left alone.
-6. Deletes empty/corrupt weights; re-downloads when a VersionId is known
-7. Orphan sidecars (no weight): re-download if VersionId known, else report — or delete with `--purge-orphans`
+5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): stage re-download + verify — never delete the existing weight on failure. If CDN bytes never match the published BLAKE3 but the version API is live, heal keeps the complete download, writes sidecars, and sets `CivitMatrix.hashMismatchKept` / `staleRemoteMeta` / `localBlake3` so later heals skip redownload thrash (same idea as `remoteUnavailable` for 404s). `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems are left alone.
+6. Deletes empty/corrupt weights; re-downloads a remaining orphan sidecar when a VersionId is known
+7. Orphan sidecars (no matching `.safetensors` / `.gguf` / `.sft`): re-download if VersionId known, else report — or delete with `--purge-orphans`
+8. Unique-stem duplicates of the same ModelId+VersionId (`foo`, `foo-v123`, `foo-v123-2`) are collapsed to the canonical stem; distinct filenames that share a version are kept
+9. Local/private weights whose hash is not on CivitAI get `CivitMatrix.hashUnresolved` so later heals do not re-query by-hash forever
+
+The local index counts `.sft` weights the same as `.safetensors` / `.gguf`. If those files are ignored, catalog/heal treat complete installs as missing and re-download (or unique-stem) extra copies.
 
 Normal batch runs also print a richer index line, e.g.  
 `Local index: 7156 blake3, 7162 versions, 7163 stems (missingBlake3=7, orphanInfo=2)`.

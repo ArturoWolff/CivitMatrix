@@ -116,6 +116,22 @@ class TestApplyCategorize(unittest.TestCase):
             plan2 = plan_categorize(root)
             self.assertEqual(plan2, [])
 
+    def test_apply_rolls_back_if_dest_sidecar_already_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_pair(root, "hero", tags=["character"], preview=True)
+            dest = root / "characters"
+            dest.mkdir()
+            (dest / "hero.cm-info.json").write_text("{}", encoding="utf-8")
+            plan = plan_categorize(root)
+            counts = apply_categorize(root, plan, dry_run=False)
+            self.assertGreaterEqual(counts["errors"], 1)
+            self.assertTrue((root / "hero.safetensors").is_file())
+            self.assertTrue((root / "hero.cm-info.json").is_file())
+            self.assertTrue((root / "hero.preview.jpeg").is_file())
+            self.assertFalse((dest / "hero.safetensors").exists())
+            self.assertFalse((dest / "hero.preview.jpeg").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

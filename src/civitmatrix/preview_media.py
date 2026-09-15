@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob as globlib
 from pathlib import Path
 
 
@@ -37,14 +38,20 @@ def pick_preview_url(images: list[dict]) -> str | None:
     return None
 
 
-def find_preview_path(out_dir: Path, stem: str) -> Path | None:
-    matches = sorted(out_dir.glob(f"{stem}.preview.*"))
-    # Ignore download temps
-    matches = [
+def iter_preview_paths(out_dir: Path, stem: str) -> list[Path]:
+    """List ``{stem}.preview.*`` treating ``stem`` as a literal (incl. ``[]``)."""
+    escaped = globlib.escape(stem)
+    return sorted(
         p
-        for p in matches
-        if not p.name.endswith(".partial") and not p.name.endswith(".preview.download")
-    ]
+        for p in out_dir.glob(f"{escaped}.preview.*")
+        if p.is_file()
+        and not p.name.endswith(".partial")
+        and not p.name.endswith(".preview.download")
+    )
+
+
+def find_preview_path(out_dir: Path, stem: str) -> Path | None:
+    matches = iter_preview_paths(out_dir, stem)
     return matches[0] if matches else None
 
 
@@ -56,10 +63,8 @@ def finalize_preview_file(tmp_path: Path, out_dir: Path, stem: str) -> Path:
     data = tmp_path.read_bytes()[:64]
     suffix = sniff_preview_suffix(data)
     final = out_dir / f"{stem}{suffix}"
-    for old in out_dir.glob(f"{stem}.preview.*"):
+    for old in iter_preview_paths(out_dir, stem):
         if old.resolve() == tmp_path.resolve():
-            continue
-        if old.name.endswith(".partial"):
             continue
         old.unlink(missing_ok=True)
     if final.exists() and final.resolve() != tmp_path.resolve():

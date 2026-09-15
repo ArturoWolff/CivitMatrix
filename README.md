@@ -173,7 +173,7 @@ Downloads land as:
 
 ```text
 YourModels/Lora/
-  my-lora.safetensors    # or .gguf when that is the primary file
+  my-lora.safetensors    # or .gguf / .sft when that is the primary file
   my-lora.cm-info.json   # SourceUrl → Civit model page
   my-lora.swarm.json     # optional: --write-swarm / WRITE_SWARM=1
   my-lora.preview.png    # or .jpeg / .webp / .mp4 — sniffed from content

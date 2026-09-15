@@ -133,6 +133,48 @@ class LocalIndexPairingTests(unittest.TestCase):
             self.assertIn(99, versions)
             self.assertIn("flux-q4", stems)
 
+    def test_sft_weight_pair_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "arale_test_2.sft").write_bytes(b"sft-weight")
+            (root / "arale_test_2.cm-info.json").write_text(
+                json.dumps(
+                    {
+                        "VersionId": 3125390,
+                        "ModelId": 2775572,
+                        "Hashes": {"BLAKE3": "sftblake"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blake3, versions, stems = load_local_index(root)
+            self.assertIn("SFTBLAKE", blake3)
+            self.assertIn(3125390, versions)
+            self.assertIn("arale_test_2", stems)
+
+    def test_sft_pair_is_not_orphan_info(self) -> None:
+        from civitmatrix.index_health import index_diagnostics
+        from civitmatrix.indexer import load_local_model_max_versions
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "arale_test_2.sft").write_bytes(b"sft-weight")
+            (root / "arale_test_2.cm-info.json").write_text(
+                json.dumps(
+                    {
+                        "VersionId": 3125390,
+                        "ModelId": 2775572,
+                        "Hashes": {"BLAKE3": "sftblake"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            diag = index_diagnostics(root)
+            self.assertEqual(diag["infoNoWeight"], [])
+            self.assertEqual(diag["weightNoInfo"], [])
+            self.assertEqual(diag["weights"], 1)
+            self.assertEqual(load_local_model_max_versions(root)[2775572], 3125390)
+
 
 class WeightPathHelpersTests(unittest.TestCase):
     def test_weight_suffix_from_name(self) -> None:
@@ -158,6 +200,20 @@ class WeightPathHelpersTests(unittest.TestCase):
 
         self.assertEqual(sanitize_stem("My Model.gguf"), "My Model")
         self.assertEqual(sanitize_stem("My Model.safetensors"), "My Model")
+        self.assertEqual(sanitize_stem("arale_test_2.sft"), "arale_test_2")
+
+    def test_iter_weight_paths_includes_sft_and_prefers_safetensors(self) -> None:
+        from civitmatrix.indexer import iter_weight_paths
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "only.sft").write_bytes(b"s")
+            (root / "both.sft").write_bytes(b"s")
+            (root / "both.safetensors").write_bytes(b"t")
+            names = {p.name for p in iter_weight_paths(root)}
+            self.assertIn("only.sft", names)
+            self.assertIn("both.safetensors", names)
+            self.assertNotIn("both.sft", names)
 
 
 if __name__ == "__main__":

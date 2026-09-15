@@ -28,7 +28,7 @@ from civitmatrix.verify_blake3 import (
     verify_weight_blake3,
     version_matches_local_hash,
 )
-from civitmatrix.version_prune import prune_old_versions
+from civitmatrix.version_prune import collapse_stem_collisions, prune_old_versions
 
 _index_lock = threading.Lock()
 
@@ -95,8 +95,9 @@ def maybe_prune_old_versions(
     local_stems: set[str],
     logger: RunLogger,
     job: JobState | None,
+    keep_stem: str = "",
 ) -> int:
-    if not enabled or dry_run:
+    if dry_run:
         return 0
     mid = model.get("id")
     if mid is None:
@@ -105,30 +106,58 @@ def maybe_prune_old_versions(
         model_id = int(mid)
     except (TypeError, ValueError):
         return 0
-    pruned = prune_old_versions(
+    n = 0
+    if enabled:
+        pruned = prune_old_versions(
+            out_dir,
+            model_id,
+            version_id,
+            local_blake3=local_blake3,
+            local_versions=local_versions,
+            local_stems=local_stems,
+            index_lock=_index_lock,
+        )
+        for cand in pruned:
+            logger.log(
+                f"PRUNE old version model={model_id} ver={cand.get('versionId')} "
+                f"stem={cand.get('stem')} keep={version_id}"
+            )
+            if job:
+                job.emit(
+                    "prune_old_version",
+                    localStem=cand.get("stem"),
+                    oldVersionId=cand.get("versionId"),
+                    keepVersionId=version_id,
+                    **_model_fields(model, version),
+                )
+                job.bump("pruned")
+        n += len(pruned)
+    collapsed = collapse_stem_collisions(
         out_dir,
         model_id,
-        version_id,
         local_blake3=local_blake3,
         local_versions=local_versions,
         local_stems=local_stems,
         index_lock=_index_lock,
+        keep_stem=keep_stem or None,
     )
-    for cand in pruned:
+    for cand in collapsed:
         logger.log(
-            f"PRUNE old version model={model_id} ver={cand.get('versionId')} "
-            f"stem={cand.get('stem')} keep={version_id}"
+            f"PRUNE duplicate stem model={model_id} ver={cand.get('versionId')} "
+            f"stem={cand.get('stem')} keep={cand.get('keepStem')}"
         )
         if job:
             job.emit(
-                "prune_old_version",
+                "prune_duplicate_stem",
                 localStem=cand.get("stem"),
+                keepStem=cand.get("keepStem"),
                 oldVersionId=cand.get("versionId"),
                 keepVersionId=version_id,
                 **_model_fields(model, version),
             )
             job.bump("pruned")
-    return len(pruned)
+        n += 1
+    return n
 
 
 def process_one(
@@ -548,6 +577,7 @@ def process_one(
             local_stems=local_stems,
             logger=logger,
             job=job,
+            keep_stem=stem,
         )
         return "ok"
     except PermissionError as e:
