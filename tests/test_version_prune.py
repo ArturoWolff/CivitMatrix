@@ -149,6 +149,42 @@ class VersionPruneTests(unittest.TestCase):
             self.assertTrue((d / "minimax_4step.safetensors").exists())
             self.assertTrue((d / "minimax_8step.safetensors").exists())
 
+    def test_collapse_keeps_unique_stem_names_with_different_blake3(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            _write_info(d, "cool", model_id=1, version_id=2, blake3="AAA")
+            _write_info(d, "cool-v2", model_id=1, version_id=2, blake3="BBB")
+            removed = collapse_stem_collisions(
+                d,
+                1,
+                2,
+                local_blake3={"AAA", "BBB"},
+                local_versions={2},
+                local_stems={"cool", "cool-v2"},
+                index_lock=threading.Lock(),
+            )
+            self.assertEqual(removed, [])
+            self.assertTrue((d / "cool.safetensors").exists())
+            self.assertTrue((d / "cool-v2.safetensors").exists())
+
+    def test_collapse_keeps_files_when_blake3_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            _write_info(d, "foo", model_id=1, version_id=9, blake3="AAA")
+            _write_info(d, "foo-v9", model_id=1, version_id=9, blake3=None)
+            removed = collapse_stem_collisions(
+                d,
+                1,
+                9,
+                local_blake3={"AAA"},
+                local_versions={9},
+                local_stems={"foo", "foo-v9"},
+                index_lock=threading.Lock(),
+            )
+            self.assertEqual(removed, [])
+            self.assertTrue((d / "foo.safetensors").exists())
+            self.assertTrue((d / "foo-v9.safetensors").exists())
+
     def test_delete_stem_bundle_literal_brackets_in_stem(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
@@ -161,6 +197,19 @@ class VersionPruneTests(unittest.TestCase):
             self.assertFalse((d / "mod[1].preview.png").exists())
             self.assertTrue((d / "mod1.preview.png").exists())
             self.assertTrue((d / "mod1.safetensors").exists())
+
+    def test_delete_stem_bundle_removes_heal_new_temps(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            _write_info(d, "ritsu_test_1-v3139916", model_id=1, version_id=3139916)
+            (d / "ritsu_test_1-v3139916.sft.heal-new").write_bytes(b"staging")
+            (d / "ritsu_test_1-v3139916.sft.heal-new.partial").write_bytes(b"part")
+            delete_stem_bundle(d, "ritsu_test_1-v3139916")
+            self.assertFalse((d / "ritsu_test_1-v3139916.safetensors").exists())
+            self.assertFalse((d / "ritsu_test_1-v3139916.sft.heal-new").exists())
+            self.assertFalse(
+                (d / "ritsu_test_1-v3139916.sft.heal-new.partial").exists()
+            )
 
     def test_delete_stem_bundle_nested(self):
         with tempfile.TemporaryDirectory() as td:

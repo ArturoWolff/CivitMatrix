@@ -176,6 +176,143 @@ class TestHealClassify(unittest.TestCase):
             self.assertEqual(status, "gated")
             self.assertTrue((out / f"{stem}.safetensors").is_file())
 
+    def test_redownload_does_not_replace_existing_on_verify_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            stem = "kept"
+            original = b"G" * 64
+            (out / f"{stem}.safetensors").write_bytes(original)
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_model.side_effect = RuntimeError("no model")
+            client.get_json.return_value = {
+                "id": 1,
+                "modelId": 2,
+                "model": {"name": "Kept", "type": "LORA"},
+                "files": [
+                    {
+                        "name": "x.safetensors",
+                        "primary": True,
+                        "downloadUrl": "https://civitai.red/api/download/models/1",
+                        "hashes": {"BLAKE3": "FFFF"},
+                        "sizeKB": 64 / 1024,
+                        "metadata": {"format": "SafeTensor"},
+                    }
+                ],
+            }
+
+            def _dl(_url: str, dest: Any, **_kw: Any) -> None:
+                Path(dest).write_bytes(b"N" * 64)
+
+            client.download.side_effect = _dl
+            status = _redownload_version(
+                client,
+                out,
+                stem,
+                1,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+                existing_cm={"ModelId": 2, "VersionId": 1, "Hashes": {"BLAKE3": "AAAA"}},
+            )
+            self.assertEqual(status, "failed")
+            self.assertEqual((out / f"{stem}.safetensors").read_bytes(), original)
+            self.assertFalse(any(out.glob("*.heal-new*")))
+
+    def test_redownload_refuses_non_weight_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            stem = "lora"
+            (out / f"{stem}.safetensors").write_bytes(b"x" * 32)
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_model.side_effect = RuntimeError("no model")
+            client.get_json.return_value = {
+                "id": 1,
+                "modelId": 2,
+                "model": {"name": "Lora", "type": "LORA"},
+                "files": [
+                    {
+                        "name": "cover.jpeg",
+                        "primary": True,
+                        "downloadUrl": "https://civitai.red/api/download/models/1",
+                        "hashes": {},
+                    }
+                ],
+            }
+
+            def _dl(_url: str, dest: Any, **_kw: Any) -> None:
+                Path(dest).write_bytes(b"not-a-weight")
+
+            client.download.side_effect = _dl
+            status = _redownload_version(
+                client,
+                out,
+                stem,
+                1,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+                existing_cm=None,
+            )
+            self.assertEqual(status, "failed")
+            client.download.assert_not_called()
+            self.assertTrue((out / f"{stem}.safetensors").is_file())
+
+    def test_redownload_picks_matching_hash_sft_not_primary_safetensors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            stem = "arale_test_2"
+            (out / f"{stem}.sft").write_bytes(b"local-sft")
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_model.side_effect = RuntimeError("no model")
+            client.get_json.return_value = {
+                "id": 9,
+                "modelId": 1,
+                "model": {"name": "Arale", "type": "LORA"},
+                "files": [
+                    {
+                        "name": "arale_test_2.safetensors",
+                        "primary": True,
+                        "downloadUrl": "https://civitai.red/api/download/models/9/primary",
+                        "hashes": {"BLAKE3": "PRIMARY"},
+                        "metadata": {"format": "SafeTensor"},
+                    },
+                    {
+                        "name": "arale_test_2.sft",
+                        "primary": False,
+                        "downloadUrl": "https://civitai.red/api/download/models/9/sft",
+                        "hashes": {"BLAKE3": "SFTAAA"},
+                        "metadata": {"format": "SafeTensor"},
+                    },
+                ],
+            }
+            seen: list[str] = []
+
+            def _dl(url: str, dest: Any, **_kw: Any) -> None:
+                seen.append(url)
+                Path(dest).write_bytes(b"local-sft")
+
+            client.download.side_effect = _dl
+            _redownload_version(
+                client,
+                out,
+                stem,
+                9,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+                existing_cm={
+                    "ModelId": 1,
+                    "VersionId": 9,
+                    "Hashes": {"BLAKE3": "SFTAAA"},
+                },
+            )
+            self.assertEqual(seen, ["https://civitai.red/api/download/models/9/sft"])
+            kwargs = client.download.call_args.kwargs
+            self.assertFalse(kwargs.get("resume", True))
+
 
 class TestPruneEmitNoDupVersionId(unittest.TestCase):
     def test_prune_emit_uses_old_version_id(self) -> None:

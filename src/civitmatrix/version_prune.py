@@ -88,7 +88,8 @@ def collapse_stem_collisions(
     Delete unique_stem duplicates of the same ModelId+VersionId in one folder.
 
     Keeps the canonical basename (no ``-v{id}`` suffix) when it has a weight.
-    Does not touch distinct filenames that share a version (multi-file versions).
+    Only removes extras whose BLAKE3 matches the kept file. Distinct hashes or
+    missing hashes are left alone (multi-file versions / incomplete sidecars).
     """
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     want_model = int(model_id) if model_id is not None else None
@@ -141,6 +142,15 @@ def collapse_stem_collisions(
         for item in items:
             stem = str(item["stem"])
             if stem == keep_stem_name:
+                continue
+            item_h = item.get("blake3")
+            keep_h = keep.get("blake3")
+            if (
+                not item_h
+                or not keep_h
+                or str(item_h).upper() != str(keep_h).upper()
+            ):
+                # Distinct files (or incomplete sidecars): never collapse by name.
                 continue
             item = {**item, "keepStem": keep_stem_name}
             if not dry_run:
@@ -201,6 +211,8 @@ def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
     for ext in WEIGHT_EXTENSIONS:
         paths.append(out_dir / f"{stem}{ext}")
         paths.append(out_dir / f"{stem}{ext}.partial")
+        paths.append(out_dir / f"{stem}{ext}.heal-new")
+        paths.append(out_dir / f"{stem}{ext}.heal-new.partial")
     wp = weight_path_for_stem(out_dir, stem)
     if wp is not None and wp not in paths:
         paths.append(wp)

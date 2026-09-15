@@ -81,7 +81,7 @@ CLI overrides env for a single run:
 
 ## Recommended workflow
 
-1. `--dry-run --limit 20` — sanity check listing + skips  
+1. `--dry-run --limit 20` — sanity check listing + skips (does not write skip-state or delete temps)  
 2. Point `LORA_DIR` at SM  
 3. Full run (or `--limit` while testing)  
 4. Watch `logs/failed.jsonl` for gated files  
@@ -173,8 +173,7 @@ source .venv/bin/activate.fish
 
 ## Preview files
 
-Previews are saved with an extension that matches **file content** (magic bytes), not always `.jpeg`.  
-Still images prefer the API image URL; video previews become `.preview.mp4`.
+Previews are saved as `{stem}.preview.<ext>` where `<ext>` is sniffed from **file content** (`.jpeg` / `.png` / `.webp` / `.gif` / `.mp4` / `.webm` / `.bin`). Heal, prune, and categorize only touch those names — never another install whose filename happens to start with `{stem}.preview.`.
 
 ## Crash leftovers & Range resume
 
@@ -186,7 +185,7 @@ Downloads write to `*{ext}.partial` (e.g. `.safetensors.partial` / `.gguf.partia
 ./run.sh --cli --keep-partials      # also keep preview download temps on start
 ```
 
-On start, preview `*.preview.download*` temps are still purged (`partial_purged`); weight partials are left alone for resume.
+On start of a **real** run (not `--dry-run`), preview `*.preview.download*` temps and non-weight `*.partial` junk (including leftover `*.heal-new.partial`) are purged recursively (`partial_purged`); weight `*.safetensors.partial` / `.gguf.partial` / `.sft.partial` are left alone for resume. `--dry-run` does not delete temps.
 
 ## Listing cache (opt-in)
 
@@ -341,11 +340,11 @@ What it does:
    (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
 3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3; sets `SourceUrl` when ids are known); writes `.swarm.json` only with `--write-swarm`; fetches a preview when missing
 4. With `--refresh-sidecars`, also re-fetches and rewrites complete installs that already have ModelId/VersionId
-5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): stage re-download + verify — never delete the existing weight on failure. If CDN bytes never match the published BLAKE3 but the version API is live, heal keeps the complete download, writes sidecars, and sets `CivitMatrix.hashMismatchKept` / `staleRemoteMeta` / `localBlake3` so later heals skip redownload thrash (same idea as `remoteUnavailable` for 404s). `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems are left alone.
-6. Deletes empty/corrupt weights; re-downloads a remaining orphan sidecar when a VersionId is known
+5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): stage re-download + verify — never replace an existing non-empty weight with unverified CDN bytes. If there was **no** prior weight and CDN bytes never match the published BLAKE3, heal may keep that complete staging file and set `CivitMatrix.hashMismatchKept`. `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems (including orphan sidecars) are left alone.
+6. Unlinks empty weights but **keeps** the sidecar until a verified re-download succeeds; heal re-downloads only `.safetensors` / `.gguf` / `.sft` (never jpeg/zip fallbacks) into `{stem}{ext}.heal-new` with resume off
 7. Orphan sidecars (no matching `.safetensors` / `.gguf` / `.sft`): re-download if VersionId known, else report — or delete with `--purge-orphans`
-8. Unique-stem duplicates of the same ModelId+VersionId (`foo`, `foo-v123`, `foo-v123-2`) are collapsed to the canonical stem; distinct filenames that share a version are kept
-9. Local/private weights whose hash is not on CivitAI get `CivitMatrix.hashUnresolved` so later heals do not re-query by-hash forever
+8. Unique-stem duplicates of the same ModelId+VersionId **and the same BLAKE3** (`foo`, `foo-v123`, `foo-v123-2`) are collapsed to the canonical stem. Names that look like unique-stem suffixes but have a different or missing hash are kept
+9. Local/private weights whose by-hash lookup **404s** get `CivitMatrix.hashUnresolved` so later heals do not re-query forever. Transport errors (429/timeouts) are not persisted; the next heal retries. `--refresh-sidecars` also retries `hashUnresolved`
 
 The local index counts `.sft` weights the same as `.safetensors` / `.gguf`. If those files are ignored, catalog/heal treat complete installs as missing and re-download (or unique-stem) extra copies.
 

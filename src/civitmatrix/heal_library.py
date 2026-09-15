@@ -11,8 +11,10 @@ from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.index_health import index_diagnostics, load_cm_info
 from civitmatrix.indexer import (
     WEIGHT_EXTENSIONS,
+    is_indexed_weight_name,
     iter_cm_info_paths,
     iter_weight_paths,
+    pick_primary_file,
     relative_pair_stem,
     weight_path_for_stem,
     weight_suffix_from_name,
@@ -341,15 +343,24 @@ def _delete_weight_bundle(out_dir: Path, stem: str, *, dry_run: bool) -> list[st
     candidates = [
         out_dir / f"{stem}.cm-info.json",
         out_dir / f"{stem}.swarm.json",
+        out_dir / f"{stem}.preview.download",
+        out_dir / f"{stem}.preview.download.partial",
         *iter_preview_paths(out_dir, stem),
     ]
     for ext in WEIGHT_EXTENSIONS:
         candidates.append(out_dir / f"{stem}{ext}")
+        candidates.append(out_dir / f"{stem}{ext}.partial")
+        candidates.append(out_dir / f"{stem}{ext}.heal-new")
+        candidates.append(out_dir / f"{stem}{ext}.heal-new.partial")
     wp = weight_path_for_stem(out_dir, stem)
     if wp is not None:
         candidates.append(wp)
+    seen: set[Path] = set()
     for p in candidates:
-        if p.is_file() and not p.name.endswith(".partial"):
+        if p in seen:
+            continue
+        seen.add(p)
+        if p.is_file() or p.is_symlink():
             removed.append(p.name)
             if not dry_run:
                 p.unlink(missing_ok=True)
@@ -441,10 +452,14 @@ def heal_library(
             if size <= 0:
                 log(f"HEAL bad weight (empty) stem={stem}")
                 version_id = cm.get("VersionId") if cm else None
-                removed = _delete_weight_bundle(out_dir, stem, dry_run=dry_run)
+                if not dry_run:
+                    try:
+                        weight.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 bump("heal_bad_weight")
                 if job:
-                    job.emit("heal_bad_weight", stem=stem, removed=removed)
+                    job.emit("heal_bad_weight", stem=stem, removed=[weight.name])
                 if version_id and not dry_run:
                     status = _redownload_version(
                         client,
@@ -469,6 +484,15 @@ def heal_library(
             continue
 
         if weight is None and info_path is not None:
+            if _remote_unavailable(cm):
+                bump("heal_remote_gone_kept")
+                continue
+            if _hash_unresolved(cm):
+                bump("heal_unresolved_kept")
+                continue
+            if _hash_mismatch_kept(cm):
+                bump("heal_hash_mismatch_kept")
+                continue
             version_id = cm.get("VersionId") if cm else None
             if purge_orphans:
                 log(f"HEAL purge orphan sidecar stem={stem}")
@@ -580,6 +604,7 @@ def heal_library(
             _bump_redownload_result(bump, status)
             continue
 
+        lookup_error = False
         version: dict[str, Any] | None = None
         if refreshing and cm and cm.get("VersionId") is not None:
             try:
@@ -589,11 +614,14 @@ def heal_library(
                 time.sleep(0.15)
             except Exception as e:
                 log(f"HEAL refresh version fetch failed stem={stem}: {e}")
+                lookup_error = True
         if version is None:
             try:
                 version = client.get_version_by_hash(local_hash)
+                lookup_error = False
             except Exception as e:
                 log(f"HEAL by-hash error stem={stem}: {e}")
+                lookup_error = True
 
         if version is None and cm and cm.get("VersionId") is not None:
             try:
@@ -601,11 +629,17 @@ def heal_library(
                     f"{client.base_url}/api/v1/model-versions/{int(cm['VersionId'])}"
                 )
                 time.sleep(0.15)
+                lookup_error = False
                 log(f"HEAL fallback VersionId={cm.get('VersionId')} stem={stem}")
             except Exception as e:
                 log(f"HEAL version fallback failed stem={stem}: {e}")
+                lookup_error = True
 
         if version is None:
+            if lookup_error:
+                log(f"HEAL lookup failed stem={stem} (not marking hashUnresolved)")
+                bump("heal_lookup_failed")
+                continue
             log(f"HEAL unresolved (hash not on CivitAI) stem={stem}")
             _mark_hash_unresolved(
                 out_dir,
@@ -748,6 +782,46 @@ def heal_library(
     return counts
 
 
+def _pick_redownload_file(
+    version: dict[str, Any],
+    existing_cm: dict[str, Any] | None,
+    out_dir: Path,
+    stem: str,
+) -> dict[str, Any] | None:
+    """Pick a known weight file; never jpeg/zip fallbacks."""
+    files = [f for f in (version.get("files") or []) if isinstance(f, dict)]
+    recorded = ((existing_cm or {}).get("Hashes") or {}).get("BLAKE3")
+    if recorded:
+        target = str(recorded).upper()
+        for f in files:
+            h = (f.get("hashes") or {}).get("BLAKE3")
+            if h and str(h).upper() == target and is_indexed_weight_name(
+                str(f.get("name") or "")
+            ):
+                return f
+    wp = weight_path_for_stem(out_dir, stem)
+    local_ext = wp.suffix.lower() if wp is not None else None
+    if local_ext:
+        ext_matches = [
+            f
+            for f in files
+            if str(f.get("name") or "").lower().endswith(local_ext)
+            and is_indexed_weight_name(str(f.get("name") or ""))
+        ]
+        for f in ext_matches:
+            if f.get("primary"):
+                return f
+        if ext_matches:
+            return ext_matches[0]
+    picked = pick_primary_file(version)
+    if picked and is_indexed_weight_name(str(picked.get("name") or "")):
+        return picked
+    for f in files:
+        if is_indexed_weight_name(str(f.get("name") or "")):
+            return f
+    return None
+
+
 def _redownload_version(
     client: Any,
     out_dir: Path,
@@ -790,17 +864,7 @@ def _redownload_version(
             return "gone"
         return "failed"
 
-    files = version.get("files") or []
-    file_info = None
-    for f in files:
-        if str(f.get("name", "")).lower().endswith(".safetensors") or (
-            f.get("metadata") or {}
-        ).get("format") == "SafeTensor":
-            file_info = f
-            if f.get("primary"):
-                break
-    if file_info is None and files:
-        file_info = files[0]
+    file_info = _pick_redownload_file(version, existing_cm, out_dir, stem)
     if file_info is None:
         return "failed"
 
@@ -813,17 +877,22 @@ def _redownload_version(
     if dry_run:
         return "ok"
     # Download beside the existing weight; only replace after BLAKE3 verify.
+    # Never Range-resume a leftover .heal-new.partial (may be another URL).
     staging = out_dir / f"{stem}{ext}.heal-new"
+    staging_partial = staging.with_suffix(staging.suffix + ".partial")
     staging.unlink(missing_ok=True)
+    staging_partial.unlink(missing_ok=True)
     try:
-        client.download(download_url, staging)
+        client.download(download_url, staging, resume=False)
     except PermissionError as e:
         log(f"HEAL redownload gated stem={stem}: {redact_secrets(str(e))}")
         staging.unlink(missing_ok=True)
+        staging_partial.unlink(missing_ok=True)
         return "gated"
     except FileNotFoundError as e:
         log(f"HEAL redownload gone stem={stem}: {redact_secrets(str(e))}")
         staging.unlink(missing_ok=True)
+        staging_partial.unlink(missing_ok=True)
         model = _model_from_version_payload(version)
         _mark_remote_unavailable(
             out_dir,
@@ -843,6 +912,7 @@ def _redownload_version(
     except Exception as e:
         log(f"HEAL redownload failed stem={stem}: {redact_secrets(str(e))}")
         staging.unlink(missing_ok=True)
+        staging_partial.unlink(missing_ok=True)
         # Never delete the existing weight because a redownload failed.
         return "failed"
 
@@ -861,9 +931,14 @@ def _redownload_version(
         model = _model_from_version_payload(version)
 
     if v_status == "fail":
-        # Never delete the existing weight. If the CDN gave a complete file
-        # whose BLAKE3 never matches published meta, keep the new bytes and
-        # mark hashMismatchKept so heal stops thrashing.
+        # Never replace an existing non-empty weight with unverified bytes.
+        existing = weight_path_for_stem(out_dir, stem)
+        existing_ok = False
+        if existing is not None:
+            try:
+                existing_ok = existing.is_file() and existing.stat().st_size > 0
+            except OSError:
+                existing_ok = False
         size_kb = file_info.get("sizeKB")
         staging_ok = False
         if staging.is_file():
@@ -876,10 +951,10 @@ def _redownload_version(
                     staging_ok = sz > 0
             else:
                 staging_ok = sz > 0
-        if staging_ok and local_hash:
+        if staging_ok and local_hash and not existing_ok:
             log(
                 f"HEAL verify fail stem={stem} reason={v_reason} — "
-                "keeping complete download (stale remote meta)"
+                "keeping complete download (stale remote meta; no prior weight)"
             )
             staging.replace(weight_path)
             _clear_sibling_weights(out_dir, stem, keep=weight_path)
@@ -905,6 +980,7 @@ def _redownload_version(
             return "hash_mismatch_kept"
         log(f"HEAL verify fail stem={stem} reason={v_reason}")
         staging.unlink(missing_ok=True)
+        staging_partial.unlink(missing_ok=True)
         return "failed"
 
     staging.replace(weight_path)

@@ -147,6 +147,9 @@ def run_batch(
     if keep_partials:
         job.emit("partial_sweep_skipped", reason="keep_partials")
         logger.log("Keeping all temps including preview downloads (--keep-partials)")
+    elif dry_run:
+        job.emit("partial_sweep_skipped", reason="dry_run")
+        logger.log("Dry-run: skipped stale temp purge")
     else:
         # Keep *.safetensors.partial for Range resume; purge preview junk only
         removed = purge_stale_partials(out_dir, keep_weight_partials=True)
@@ -691,6 +694,9 @@ def run_heal(
     try:
         if keep_partials:
             job.emit("partial_sweep_skipped", reason="keep_partials")
+        elif dry_run:
+            job.emit("partial_sweep_skipped", reason="dry_run")
+            logger.log("Dry-run: skipped stale temp purge")
         else:
             removed = purge_stale_partials(out_dir, keep_weight_partials=True)
             job.set_count("partialsPurged", len(removed))

@@ -28,6 +28,12 @@ def sanitize_stem(name: str, max_len: int = 120) -> str:
     return name[:max_len]
 
 
+def is_indexed_weight_name(remote_name: str) -> bool:
+    """True when the remote file uses a suffix ``iter_weight_paths`` can see."""
+    suffix = Path(remote_name or "").suffix.lower()
+    return suffix in KNOWN_WEIGHT_SUFFIXES
+
+
 def weight_suffix_from_name(remote_name: str) -> str:
     """
     Destination extension from a remote file name.

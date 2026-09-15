@@ -17,6 +17,7 @@ from civitmatrix.indexer import (
     pick_primary_file,
     unique_stem,
     update_only_skip_reason,
+    is_indexed_weight_name,
     weight_suffix_from_name,
 )
 from civitmatrix.job_state import JobState
@@ -208,11 +209,23 @@ def process_one(
         )
         return "no_files"
 
+    remote_name = file_info.get("name") or f"model-{int(version['id'])}.safetensors"
+    if not is_indexed_weight_name(str(remote_name)):
+        logger.fail_with_event(
+            job,
+            model,
+            "no_files",
+            retryable=False,
+            version=version,
+            extra={"detail": f"unsupported weight extension: {remote_name}"},
+            **_model_fields(model, version),
+        )
+        return "no_files"
+
     blake3 = (file_info.get("hashes") or {}).get("BLAKE3")
     version_id = int(version["id"])
     skip_reason: str | None = None
     stem = ""
-    remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
 
     mid_raw = model.get("id")
     try:
@@ -254,10 +267,11 @@ def process_one(
             skip_reason = "skip_version"
         else:
             stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
-            local_stems.add(stem.lower())
-            local_versions.add(version_id)
-            if blake3:
-                local_blake3.add(blake3.upper())
+            if not dry_run:
+                local_stems.add(stem.lower())
+                local_versions.add(version_id)
+                if blake3:
+                    local_blake3.add(blake3.upper())
 
     if skip_reason:
         if job:
@@ -581,9 +595,10 @@ def process_one(
         )
         return "ok"
     except PermissionError as e:
-        _release_reservation(
-            local_blake3, local_versions, local_stems, blake3, version_id, stem
-        )
+        if not weight_committed:
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
         logger.fail_with_event(
             job,
             model,
@@ -603,9 +618,10 @@ def process_one(
             )
         return "forbidden"
     except FileNotFoundError as e:
-        _release_reservation(
-            local_blake3, local_versions, local_stems, blake3, version_id, stem
-        )
+        if not weight_committed:
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
         logger.fail_with_event(
             job,
             model,
@@ -625,9 +641,10 @@ def process_one(
             )
         return "not_found"
     except Exception as e:
-        _release_reservation(
-            local_blake3, local_versions, local_stems, blake3, version_id, stem
-        )
+        if not weight_committed:
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
         logger.fail_with_event(
             job,
             model,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob as globlib
 from pathlib import Path
 
 
@@ -38,16 +37,28 @@ def pick_preview_url(images: list[dict]) -> str | None:
     return None
 
 
+# Exact preview names we write/read. Never glob ``{stem}.preview.*`` — that
+# matches another install named ``{stem}.preview.safetensors``.
+PREVIEW_SUFFIXES = (
+    ".preview.jpeg",
+    ".preview.jpg",
+    ".preview.png",
+    ".preview.webp",
+    ".preview.gif",
+    ".preview.mp4",
+    ".preview.webm",
+    ".preview.bin",
+)
+
+
 def iter_preview_paths(out_dir: Path, stem: str) -> list[Path]:
-    """List ``{stem}.preview.*`` treating ``stem`` as a literal (incl. ``[]``)."""
-    escaped = globlib.escape(stem)
-    return sorted(
-        p
-        for p in out_dir.glob(f"{escaped}.preview.*")
-        if p.is_file()
-        and not p.name.endswith(".partial")
-        and not p.name.endswith(".preview.download")
-    )
+    """List known ``{stem}.preview.<ext>`` files (literal stem, incl. ``[]``)."""
+    found: list[Path] = []
+    for suffix in PREVIEW_SUFFIXES:
+        p = out_dir / f"{stem}{suffix}"
+        if p.is_file():
+            found.append(p)
+    return sorted(found)
 
 
 def find_preview_path(out_dir: Path, stem: str) -> Path | None:

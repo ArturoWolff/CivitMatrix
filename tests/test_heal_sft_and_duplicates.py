@@ -130,6 +130,80 @@ class HealSftAndDuplicateTests(unittest.TestCase):
             )
             client.get_version_by_hash.assert_not_called()
 
+    def test_by_hash_exception_does_not_mark_hash_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            (out / "local-lora.safetensors").write_bytes(b"private-weight-bytes")
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_version_by_hash.side_effect = RuntimeError("HTTP 429")
+            counts = heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+            )
+            self.assertIsNone(counts.get("heal_unresolved"))
+            cm_path = out / "local-lora.cm-info.json"
+            if cm_path.is_file():
+                cm = json.loads(cm_path.read_text(encoding="utf-8"))
+                self.assertFalse((cm.get("CivitMatrix") or {}).get("hashUnresolved"))
+            client.get_version_by_hash.reset_mock()
+            client.get_version_by_hash.side_effect = RuntimeError("HTTP 429")
+            heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+            )
+            client.get_version_by_hash.assert_called()
+
+    def test_missing_weight_remote_unavailable_does_not_redownload(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            cm = _complete_cm(model_id=1, version_id=9)
+            cm["CivitMatrix"] = {"remoteUnavailable": True}
+            (out / "gone.cm-info.json").write_text(json.dumps(cm), encoding="utf-8")
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            counts = heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+            )
+            client.get_json.assert_not_called()
+            client.download.assert_not_called()
+            self.assertTrue((out / "gone.cm-info.json").is_file())
+            self.assertGreaterEqual(
+                (counts.get("heal_remote_gone_kept") or 0)
+                + (counts.get("heal_unresolved_kept") or 0),
+                1,
+            )
+
+    def test_empty_weight_keeps_sidecar_when_redownload_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            (out / "empty.safetensors").write_bytes(b"")
+            (out / "empty.cm-info.json").write_text(
+                json.dumps(_complete_cm(model_id=1, version_id=9)),
+                encoding="utf-8",
+            )
+            client = MagicMock()
+            client.base_url = "https://civitai.red"
+            client.get_json.side_effect = PermissionError("HTTP 401")
+            heal_library(
+                client=client,
+                out_dir=out,
+                build_cm_info=build_cm_info,
+                log=lambda _m: None,
+                dry_run=False,
+            )
+            self.assertTrue((out / "empty.cm-info.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

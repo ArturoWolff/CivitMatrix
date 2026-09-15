@@ -75,6 +75,20 @@ class TestPlanCategorize(unittest.TestCase):
             self.assertEqual(by_stem["outfit"]["toDir"], "clothes")
             self.assertEqual(by_stem["misc"]["toDir"], "uncategorized")
 
+    def test_bundle_does_not_steal_other_model_named_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_pair(root, "hero", tags=["character"], preview=True)
+            (root / "hero.preview.safetensors").write_bytes(b"other-weight")
+            (root / "hero.preview.cm-info.json").write_text(
+                json.dumps({"Tags": ["character"], "ModelId": 2, "VersionId": 3}),
+                encoding="utf-8",
+            )
+            plan = plan_categorize(root)
+            hero = next(e for e in plan if e["stem"] == "hero")
+            stolen = [p for p in hero["paths"] if p.endswith("hero.preview.safetensors")]
+            self.assertEqual(stolen, [])
+
     def test_basename_destination_not_nested(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

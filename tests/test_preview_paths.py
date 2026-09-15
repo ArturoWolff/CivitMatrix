@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from civitmatrix.preview_media import find_preview_path, iter_preview_paths
+from civitmatrix.preview_media import (
+    find_preview_path,
+    finalize_preview_file,
+    iter_preview_paths,
+)
 
 
 class PreviewPathLiteralStemTests(unittest.TestCase):
@@ -20,6 +24,20 @@ class PreviewPathLiteralStemTests(unittest.TestCase):
             self.assertEqual(found, target)
             names = {p.name for p in iter_preview_paths(d, "mod[1]")}
             self.assertEqual(names, {"mod[1].preview.png"})
+
+    def test_preview_glob_does_not_match_other_model_named_stem_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            (d / "hero.preview.jpeg").write_bytes(b"\xff\xd8\xff")
+            (d / "hero.preview.safetensors").write_bytes(b"other-weight")
+            (d / "hero.preview.cm-info.json").write_text("{}", encoding="utf-8")
+            names = {p.name for p in iter_preview_paths(d, "hero")}
+            self.assertEqual(names, {"hero.preview.jpeg"})
+            tmp = d / "hero.preview.download"
+            tmp.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+            finalize_preview_file(tmp, d, "hero")
+            self.assertTrue((d / "hero.preview.safetensors").is_file())
+            self.assertTrue((d / "hero.preview.cm-info.json").is_file())
 
 
 if __name__ == "__main__":

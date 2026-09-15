@@ -197,7 +197,7 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
 | `<out>/.civitmatrix.lock` | One writer per output folder |
 
-On start (after lock), preview download temps are purged; **weight** `*.safetensors.partial` / `*.gguf.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
+On start of a real run (after lock), preview download temps and leftover `*.heal-new.partial` are purged recursively; **weight** `*.safetensors.partial` / `*.gguf.partial` / `*.sft.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). `--dry-run` does not delete temps. Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
 
 Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Verified local files are still skipped on restart (recursive scan of the out dir, including SM category subfolders).
 
