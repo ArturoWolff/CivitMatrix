@@ -153,6 +153,11 @@ No API key needed for these:
 ./run.sh --resume              # continue
 ./run.sh --cancel              # cooperative stop (exit 4); Ctrl+C does the same
 
+# Conservative health check and additive metadata repair (never changes weights)
+python -m civitmatrix.maintenance /path/to/Models
+python -m civitmatrix.maintenance /path/to/Models --civit --apply
+
+# Standard heal can prune duplicates and replace bad weights; review dry-run first
 # Fix incomplete sidecars / orphans in an existing library
 ./run.sh --cli --heal --dry-run
 ./run.sh --cli --heal

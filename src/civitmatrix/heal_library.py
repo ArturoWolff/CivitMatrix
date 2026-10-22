@@ -236,19 +236,10 @@ def _pick_file_for_hash(version: dict[str, Any], blake3: str) -> dict[str, Any] 
         h = (f.get("hashes") or {}).get("BLAKE3")
         if h and str(h).upper() == target:
             return f
-    safetensors = [
-        f
-        for f in files
-        if str(f.get("name", "")).lower().endswith(".safetensors")
-        or (f.get("metadata") or {}).get("format") == "SafeTensor"
-    ]
-    pool = safetensors or files
-    if not pool:
-        return None
-    for f in pool:
-        if f.get("primary"):
-            return f
-    return pool[0]
+    # A by-hash response can reference a version whose files do not include
+    # this weight (for example a VAE associated with a checkpoint). Never
+    # substitute its primary file: that can replace a different model.
+    return None
 
 
 def _model_from_version_payload(version: dict[str, Any]) -> dict[str, Any]:

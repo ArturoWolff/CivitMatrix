@@ -344,7 +344,8 @@ What it does:
 6. Unlinks empty weights but **keeps** the sidecar until a verified re-download succeeds; heal re-downloads only `.safetensors` / `.gguf` / `.sft` (never jpeg/zip fallbacks) into `{stem}{ext}.heal-new` with resume off
 7. Orphan sidecars (no matching `.safetensors` / `.gguf` / `.sft`): re-download if VersionId known, else report — or delete with `--purge-orphans`
 8. Unique-stem duplicates of the same ModelId+VersionId **and the same BLAKE3** (`foo`, `foo-v123`, `foo-v123-2`) are collapsed to the canonical stem. Names that look like unique-stem suffixes but have a different or missing hash are kept
-9. Local/private weights whose by-hash lookup **404s** get `CivitMatrix.hashUnresolved` so later heals do not re-query forever. Transport errors (429/timeouts) are not persisted; the next heal retries. `--refresh-sidecars` also retries `hashUnresolved`
+9. A by-hash API response must contain a file with the exact local BLAKE3. If it only returns an associated version (for example a checkpoint associated with a VAE), heal keeps the weight and reports it unresolved; it never substitutes that version's primary file.
+10. Local/private weights whose by-hash lookup **404s** get `CivitMatrix.hashUnresolved` so later heals do not re-query forever. Transport errors (429/timeouts) are not persisted; the next heal retries. `--refresh-sidecars` also retries `hashUnresolved`
 
 The local index counts `.sft` weights the same as `.safetensors` / `.gguf`. If those files are ignored, catalog/heal treat complete installs as missing and re-download (or unique-stem) extra copies.
 
@@ -361,3 +362,40 @@ Normal batch runs also print a richer index line, e.g.
 
 - [Linktree](https://linktr.ee/ArturoWolff)  
 - [Ko-fi](https://ko-fi.com/arturowolff)
+
+### Conservative maintenance (no weight changes)
+
+Use this separate command when you want health checks and missing metadata filled
+without normal heal's duplicate pruning or weight replacement:
+
+```bash
+python -m civitmatrix.maintenance /path/to/Models
+python -m civitmatrix.maintenance /path/to/Models --civit --apply
+```
+
+The default is read-only. Multiple roots are accepted; directory symlinks are
+followed once, including models stored on another drive. The command reports
+broken links, empty weights, partial downloads, malformed sidecars, and invalid
+SafeTensors headers/data offsets. These are structural checks, not a full tensor
+content or numerical-quality test. Legacy `.pth`, `.pt`, `.ckpt`, `.bin`, `.onnx`,
+and `.gguf` files are inventoried without executing or unpickling them.
+
+`--apply` adds missing `.cm-info.json` and `.swarm.json` metadata and fills empty
+fields while preserving populated values. Non-Civit files receive available
+embedded information and explicitly identified local filename/format/size facts;
+unknown authors, Civit IDs, licenses, and base models are not invented. Embedded
+hashes are not treated as whole-file hashes. Embedded Civit page references can
+supply a source link without asserting an exact Civit file match.
+
+`--civit` uses your existing `.env` settings to look up incomplete sidecars by a
+computed whole-file BLAKE3. Only an exact API file-hash match supplies Civit IDs.
+Existing hash or identity conflicts are reported and left untouched. API errors
+remain retryable. Complete Civit records are not re-downloaded or rehashed.
+
+Weights, duplicates, orphan files, and existing partial downloads are never
+removed, moved, rewritten, or replaced by this command. Sidecar additions use an
+atomic write with a concurrent-change check. Apply runs take CivitMatrix directory
+locks. Keep other library writers idle during maintenance. Output is JSON Lines;
+redirect it to `logs/maintenance.jsonl` for a local, gitignored record. A nonzero
+exit means a scan error, empty weight, broken link, or metadata/hash conflict needs
+attention. Review these before considering standard heal or any destructive action.
