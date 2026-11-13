@@ -229,6 +229,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                     {
                         "ModelId": 10,
                         "VersionId": 20,
+                        "RemoteFileId": 22,
                         "Hashes": {"BLAKE3": "AA" * 32},
                         "SourceUrl": None,
                     }
@@ -249,6 +250,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 "trainedWords": [],
                 "files": [
                     {
+                        "id": 22,
                         "name": "x.safetensors",
                         "primary": True,
                         "downloadUrl": "https://civitai.red/download/x",
@@ -282,6 +284,7 @@ class TestHealRefreshSidecars(unittest.TestCase):
                 log=lambda _m: None,
                 dry_run=False,
                 refresh_sidecars=True,
+                allow_deletions=True,
                 write_swarm=True,
             )
             self.assertEqual(counts.get("heal_hash_mismatch"), 1)

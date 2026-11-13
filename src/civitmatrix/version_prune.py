@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import threading
 from pathlib import Path
 from typing import Any, Iterator
 
+from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.indexer import (
     WEIGHT_EXTENSIONS,
+    cm_install_identity,
     iter_cm_info_paths,
+    load_local_index,
     relative_pair_stem,
     weight_path_for_stem,
 )
@@ -65,11 +69,70 @@ def _keep_collision_rank(
     canonical = collision_base_name(stem, version_id) == name
     return (
         0 if item.get("hasWeight") else 1,
-        0 if canonical else 1,
         0 if keep_stem and stem == keep_stem else 1,
+        0 if canonical else 1,
         len(name),
         stem,
     )
+
+
+def _verified_identity(out_dir: Path, stem: str, data: dict[str, Any]):
+    """Complete publisher/file identity backed by the actual local payload."""
+    try:
+        info_path = out_dir / f"{stem}.cm-info.json"
+        info_stat = info_path.lstat()
+        if not stat.S_ISREG(info_stat.st_mode):
+            return None
+        info_bytes = info_path.read_bytes()
+        current = json.loads(info_bytes)
+        if current != data:
+            return None
+        identity = cm_install_identity(data)
+        if identity is None:
+            return None
+        hashes = data.get("Hashes")
+        recorded = hashes.get("BLAKE3") if isinstance(hashes, dict) else None
+        wp = weight_path_for_stem(out_dir, stem)
+        if (not recorded or wp is None or wp.is_symlink()
+                or (out_dir / f"{stem}.cm-info.json").is_symlink()
+                or wp.stat().st_size <= 0):
+            return None
+        # A bundle sharing its stem with another format is ambiguous.
+        if sum((out_dir / f"{stem}{ext}").is_file() for ext in WEIGHT_EXTENSIONS) != 1:
+            return None
+        weight_stat = wp.lstat()
+        if not stat.S_ISREG(weight_stat.st_mode):
+            return None
+        actual = file_blake3_hex(wp).upper()
+        def unchanged(before, after):
+            return (before.st_dev, before.st_ino, before.st_mode, before.st_size,
+                    before.st_mtime_ns, before.st_ctime_ns) == (
+                    after.st_dev, after.st_ino, after.st_mode, after.st_size,
+                    after.st_mtime_ns, after.st_ctime_ns)
+        # Hashing can take minutes. Publisher metadata and payload must both
+        # remain the same objects with the same contents throughout the read.
+        if (not unchanged(weight_stat, wp.lstat())
+                or not unchanged(info_stat, info_path.lstat())
+                or info_path.read_bytes() != info_bytes
+                or not unchanged(info_stat, info_path.lstat())):
+            return None
+        if actual != str(recorded).upper():
+            return None
+        if wp.suffix.lower() != identity[-1]:
+            return None
+        return identity, actual
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _verified_current_bundle(out_dir: Path, stem: str):
+    try:
+        data = json.loads((out_dir / f"{stem}.cm-info.json").read_bytes())
+        if not isinstance(data, dict):
+            return None
+        return _verified_identity(out_dir, stem, data)
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def collapse_stem_collisions(
@@ -83,120 +146,110 @@ def collapse_stem_collisions(
     index_lock: threading.Lock | None = None,
     keep_stem: str | None = None,
     dry_run: bool = False,
+    allow_delete: bool = False,
 ) -> list[dict[str, Any]]:
-    """
-    Delete unique_stem duplicates of the same ModelId+VersionId in one folder.
+    """Propose exact duplicate bundles; deleting needs explicit authorization.
 
-    Keeps the canonical basename (no ``-v{id}`` suffix) when it has a weight.
-    Only removes extras whose BLAKE3 matches the kept file. Distinct hashes or
-    missing hashes are left alone (multi-file versions / incomplete sidecars).
+    Different versions, authors, bases, formats or remote files never qualify.
+    Unknown identity or bytes inconsistent with metadata means preserve.
     """
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    want_model = int(model_id) if model_id is not None else None
-    want_version = int(version_id) if version_id is not None else None
     for info_path, data in iter_model_sidecars(out_dir, recursive=True):
-        mid = data.get("ModelId")
-        vid = data.get("VersionId")
+        stem = relative_pair_stem(out_dir, info_path, cm_info=True)
         try:
-            mid_i = int(mid)
-            vid_i = int(vid)
+            mid, vid = int(data.get("ModelId")), int(data.get("VersionId"))
         except (TypeError, ValueError):
             continue
-        if want_model is not None and mid_i != want_model:
+        if model_id is not None and mid != int(model_id):
             continue
-        if want_version is not None and vid_i != want_version:
+        if version_id is not None and vid != int(version_id):
             continue
-        stem = relative_pair_stem(out_dir, info_path, cm_info=True)
-        base = collision_base_name(stem, vid_i)
-        key = (mid_i, vid_i, _stem_parent_key(stem), base.lower())
-        wp = weight_path_for_stem(out_dir, stem)
-        has_weight = False
-        if wp is not None:
-            try:
-                has_weight = wp.is_file() and wp.stat().st_size > 0
-            except OSError:
-                has_weight = False
-        blake3 = (data.get("Hashes") or {}).get("BLAKE3")
-        groups.setdefault(key, []).append(
-            {
-                "stem": stem,
-                "modelId": mid_i,
-                "versionId": vid_i,
-                "blake3": str(blake3).upper() if blake3 else None,
-                "infoPath": info_path,
-                "hasWeight": has_weight,
-            }
-        )
-
-    removed: list[dict[str, Any]] = []
-    for (_mid, vid_i, _parent, _base), items in groups.items():
+        # Only hash candidate collision groups, not every unrelated large model.
+        key = (mid, vid, _stem_parent_key(stem), collision_base_name(stem, vid).lower())
+        groups.setdefault(key, []).append({"stem": stem, "modelId": mid,
+            "versionId": vid, "infoPath": info_path, "data": data, "hasWeight": True})
+    candidates: list[dict[str, Any]] = []
+    for (_, vid, _, _), items in groups.items():
         if len(items) < 2:
             continue
-        keep = min(
-            items,
-            key=lambda it: _keep_collision_rank(
-                it, version_id=int(vid_i), keep_stem=keep_stem
-            ),
-        )
-        keep_stem_name = str(keep["stem"])
+        verified: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for item in items:
-            stem = str(item["stem"])
-            if stem == keep_stem_name:
-                continue
-            item_h = item.get("blake3")
-            keep_h = keep.get("blake3")
-            if (
-                not item_h
-                or not keep_h
-                or str(item_h).upper() != str(keep_h).upper()
-            ):
-                # Distinct files (or incomplete sidecars): never collapse by name.
-                continue
-            item = {**item, "keepStem": keep_stem_name}
-            if not dry_run:
-                delete_stem_bundle(out_dir, stem)
-                leftover = out_dir / f"{stem}.cm-info.json"
-                if leftover.exists():
+            result = _verified_identity(out_dir, item["stem"], item["data"])
+            if result is not None:
+                identity, actual = result
+                item["blake3"] = actual
+                verified.setdefault((identity, actual), []).append(item)
+        for expected, same in verified.items():
+            keep = min(same, key=lambda it: _keep_collision_rank(it, version_id=vid, keep_stem=keep_stem))
+            for item in same:
+                if item is keep:
                     continue
-            removed.append(item)
-            if index_lock is not None and local_stems is not None:
-                with index_lock:
-                    local_stems.discard(Path(stem).name.lower())
-    return removed
+                candidate = {k: v for k, v in item.items() if k != "data"}
+                candidate.update(keepStem=keep["stem"], deleted=False)
+                if allow_delete and not dry_run:
+                    # Recheck survivor immediately before any destructive operation.
+                    if (_verified_identity(out_dir, keep["stem"], keep["data"]) != expected
+                            or _verified_identity(out_dir, item["stem"], item["data"]) != expected):
+                        continue
+                    delete_stem_bundle(out_dir, item["stem"])
+                    if (out_dir / f'{item["stem"]}.cm-info.json').exists():
+                        continue
+                    candidate["deleted"] = True
+                    if index_lock is not None and local_stems is not None:
+                        with index_lock:
+                            local_stems.discard(Path(item["stem"]).name.lower())
+                candidates.append(candidate)
+    return candidates
 
 
 def find_prune_candidates(
     out_dir: Path,
     model_id: int,
     keep_version_id: int,
+    *,
+    base_model: str | None = None,
+    keep_stem: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Local stems for model_id whose VersionId is not keep_version_id."""
-    want = int(model_id)
-    keep = int(keep_version_id)
-    out: list[dict[str, Any]] = []
-    for info_path, data in iter_model_sidecars(out_dir, recursive=True):
-        mid = data.get("ModelId")
-        if mid is None:
+    """Plan genuinely older releases in a verified survivor's publisher/base scope."""
+    rows = list(iter_model_sidecars(out_dir, recursive=True))
+    survivors = []
+    for path, data in rows:
+        if data.get("ModelId") != model_id or data.get("VersionId") != keep_version_id:
             continue
+        stem = relative_pair_stem(out_dir, path, cm_info=True)
+        if keep_stem and stem != keep_stem:
+            continue
+        if base_model and data.get("BaseModel") != base_model:
+            continue
+        verified = _verified_identity(out_dir, stem, data)
+        if verified is not None:
+            survivors.append((stem, verified))
+    # An unscoped mixed-base survivor set does not authorize a cleanup.
+    scopes = {(v[0], v[2], v[3], v[4], v[7], v[10])
+              for _, (v, _) in survivors}
+    if len(scopes) != 1:
+        return []
+    scope = next(iter(scopes))
+    candidates = []
+    for path, data in rows:
         try:
-            if int(mid) != want:
+            if int(data.get("ModelId")) != int(model_id) or not 0 < int(data.get("VersionId")) < int(keep_version_id):
                 continue
-            vid = int(data.get("VersionId"))
         except (TypeError, ValueError):
             continue
-        if vid == keep:
+        stem = relative_pair_stem(out_dir, path, cm_info=True)
+        verified = _verified_identity(out_dir, stem, data)
+        if verified is None:
             continue
-        stem = relative_pair_stem(out_dir, info_path, cm_info=True)
-        blake3 = (data.get("Hashes") or {}).get("BLAKE3")
-        out.append(
-            {
-                "stem": stem,
-                "versionId": vid,
-                "blake3": str(blake3).upper() if blake3 else None,
-                "infoPath": info_path,
-            }
-        )
-    return out
+        identity, actual = verified
+        if (identity[0], identity[2], identity[3], identity[4], identity[7], identity[10]) != scope:
+            continue
+        keep_stem_name, (keep_identity, keep_hash) = survivors[0]
+        candidates.append({"stem": stem, "versionId": identity[1], "blake3": actual,
+                           "infoPath": path, "identity": identity,
+                           "keepStem": keep_stem_name, "keepIdentity": keep_identity,
+                           "keepBlake3": keep_hash})
+    return candidates
 
 
 def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
@@ -238,27 +291,40 @@ def prune_old_versions(
     local_versions: set[int],
     local_stems: set[str],
     index_lock: threading.Lock,
+    allow_delete: bool = False,
+    base_model: str | None = None,
+    keep_stem: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Delete older ModelId stems and drop them from the in-memory index.
     Returns the candidate dicts that were pruned (best-effort deletes).
     """
-    candidates = find_prune_candidates(out_dir, model_id, keep_version_id)
+    if not allow_delete:
+        return []
+    candidates = find_prune_candidates(out_dir, model_id, keep_version_id,
+                                     base_model=base_model, keep_stem=keep_stem)
     pruned: list[dict[str, Any]] = []
     for cand in candidates:
         stem = str(cand["stem"])
+        if (_verified_current_bundle(out_dir, stem) != (cand["identity"], cand["blake3"])
+                or _verified_current_bundle(out_dir, cand["keepStem"])
+                != (cand["keepIdentity"], cand["keepBlake3"])):
+            continue
         delete_stem_bundle(out_dir, stem)
         info = out_dir / f"{stem}.cm-info.json"
         if info.exists():
             continue
         pruned.append(cand)
+    if pruned:
+        remaining_hashes, remaining_versions, remaining_stems = load_local_index(out_dir)
         with index_lock:
-            local_stems.discard(Path(stem).name.lower())
-            try:
-                local_versions.discard(int(cand["versionId"]))
-            except (TypeError, ValueError, KeyError):
-                pass
-            b3 = cand.get("blake3")
-            if b3:
-                local_blake3.discard(str(b3).upper())
+            # A hash or basename may still be owned by another retained bundle.
+            for cand in pruned:
+                stem = Path(str(cand["stem"])).name.lower()
+                if stem not in remaining_stems:
+                    local_stems.discard(stem)
+                if cand["versionId"] not in remaining_versions:
+                    local_versions.discard(cand["versionId"])
+                if cand.get("blake3") not in remaining_hashes:
+                    local_blake3.discard(str(cand.get("blake3")).upper())
     return pruned

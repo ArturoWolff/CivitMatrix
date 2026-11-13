@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,6 +17,7 @@ from civitmatrix.strip_swarm_thumbnails import strip_swarm_thumbnails
 from civitmatrix.logging_io import RunLogger
 from civitmatrix.pause_control import request_pause_cli, request_resume_cli
 from civitmatrix.status_control import print_status_cli
+from civitmatrix.run_lock import RunLock, RunLockError
 
 # Public /api/v1/models sort enum (site Meilisearch labels like Relevancy / Most Buzz differ).
 SORT_CHOICES = [
@@ -142,12 +145,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--updated-from",
-        default="",
+        default=None,
         help="Inclusive start date (YYYY-MM-DD) for last updated filter",
     )
     p.add_argument(
         "--updated-to",
-        default="",
+        default=None,
         help="Inclusive end date (YYYY-MM-DD) for last updated filter",
     )
     p.add_argument(
@@ -286,7 +289,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--keep-old-versions",
         action="store_true",
-        help="Do not delete older local versions of the same model when a newer one is kept",
+        default=True,
+        help="Preserve historical versions (the default)",
+    )
+    p.add_argument(
+        "--prune-old-versions",
+        dest="keep_old_versions",
+        action="store_false",
+        help="Request older-version pruning (also requires --allow-deletions)",
+    )
+    p.add_argument(
+        "--allow-deletions", action="store_true",
+        help="Explicitly authorize cleanup deletions for this CLI run",
     )
     p.add_argument(
         "--update-only",
@@ -343,46 +357,46 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="JSON job from UI (filters + selection)",
     )
-    p.add_argument("--tag-include", type=str, default="", help="Comma tags include")
-    p.add_argument("--tag-exclude", type=str, default="", help="Comma tags exclude")
+    p.add_argument("--tag-include", type=str, default=None, help="Comma tags include")
+    p.add_argument("--tag-exclude", type=str, default=None, help="Comma tags exclude")
     p.add_argument(
         "--category",
         type=str,
-        default="All",
+        default=None,
         choices=CATEGORY_CHOICES,
         help="Category filter (All = no filter)",
     )
-    p.add_argument("--users", type=str, default="", help="Comma creator usernames")
+    p.add_argument("--users", type=str, default=None, help="Comma creator usernames")
     p.add_argument(
         "--users-deny",
         type=str,
-        default="",
+        default=None,
         help="Comma creator usernames to exclude",
     )
     p.add_argument(
         "--format",
         dest="file_format",
         type=str,
-        default="All",
+        default=None,
         choices=FORMAT_CHOICES,
         help="File format filter (All = no filter)",
     )
     p.add_argument(
         "--min-downloads",
         type=int,
-        default=0,
+        default=None,
         help="Minimum stats.downloadCount (0 = no floor)",
     )
     p.add_argument(
         "--min-likes",
         type=int,
-        default=0,
+        default=None,
         help="Minimum stats.thumbsUpCount / likeCount (0 = no floor)",
     )
     p.add_argument(
         "--base-only",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Require every modelVersion.baseModel to match --base-model (drop multi-base)",
     )
     p.add_argument(
@@ -403,6 +417,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print('\nInterrupted.', file=sys.stderr)
+        return 130
+
+
+def _main(argv: list[str] | None = None) -> int:
     import sys
 
     # Prefer config next to where the user runs the tool (repo clone / working dir)
@@ -438,73 +462,6 @@ def main(argv: list[str] | None = None) -> int:
         return request_pause_cli(logs_dir, logs_dir / "job.json")
     if args.resume:
         return request_resume_cli(logs_dir, logs_dir / "job.json")
-    if args.strip_swarm_thumbnails:
-        from civitmatrix.directories_config import load_directories, path_for_type
-
-        model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
-        if args.out:
-            out_dir = Path(args.out).expanduser()
-        elif os.environ.get("LORA_DIR"):
-            out_dir = Path(os.environ["LORA_DIR"]).expanduser()
-        else:
-            dirs_cfg = load_directories(logs_dir / "directories.json")
-            out_dir = path_for_type(dirs_cfg, model_type)
-        if not out_dir.is_absolute():
-            out_dir = (root / out_dir).resolve()
-        counts = strip_swarm_thumbnails(out_dir, dry_run=args.dry_run)
-        print(f"strip-swarm-thumbnails: {counts}")
-        return 0
-
-    if args.fix_swarm_architecture:
-        from civitmatrix.directories_config import load_directories, path_for_type
-
-        model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
-        if args.out:
-            out_dir = Path(args.out).expanduser()
-        elif os.environ.get("LORA_DIR"):
-            out_dir = Path(os.environ["LORA_DIR"]).expanduser()
-        else:
-            dirs_cfg = load_directories(logs_dir / "directories.json")
-            out_dir = path_for_type(dirs_cfg, model_type)
-        if not out_dir.is_absolute():
-            out_dir = (root / out_dir).resolve()
-        counts = fix_swarm_architecture(out_dir, dry_run=args.dry_run)
-        print(f"fix-swarm-architecture: {counts}")
-        return 0
-
-    if args.categorize:
-        from civitmatrix.categorize import apply_categorize, plan_categorize
-        from civitmatrix.directories_config import load_directories, path_for_type
-
-        model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
-        if args.out:
-            out_dir = Path(args.out).expanduser()
-        elif os.environ.get("LORA_DIR"):
-            out_dir = Path(os.environ["LORA_DIR"]).expanduser()
-        else:
-            dirs_cfg = load_directories(logs_dir / "directories.json")
-            out_dir = path_for_type(dirs_cfg, model_type)
-        if not out_dir.is_absolute():
-            out_dir = (root / out_dir).resolve()
-        # --categorize is dry-run unless --apply; --dry-run without --apply stays plan-only
-        dry_run = not bool(args.apply)
-        if args.dry_run and args.apply:
-            print("ERROR: --dry-run and --apply are mutually exclusive with --categorize")
-            return 2
-        plan = plan_categorize(out_dir)
-        by_bucket: dict[str, int] = {}
-        for entry in plan:
-            b = str(entry.get("toDir") or "?")
-            by_bucket[b] = by_bucket.get(b, 0) + 1
-        print(
-            f"categorize plan: {len(plan)} move(s)"
-            + (f" {by_bucket}" if by_bucket else "")
-            + (" (dry-run)" if dry_run else " (--apply)")
-        )
-        counts = apply_categorize(out_dir, plan, dry_run=dry_run)
-        print(f"categorize: {counts}")
-        return 0 if counts.get("errors", 0) == 0 else 1
-
     def _resolve_out_dir_early() -> Path:
         from civitmatrix.directories_config import load_directories, path_for_type
 
@@ -520,19 +477,70 @@ def main(argv: list[str] | None = None) -> int:
             od = (root / od).resolve()
         return od
 
+    local_maintenance = (
+        args.strip_swarm_thumbnails or args.fix_swarm_architecture
+        or args.categorize or args.import_sm_manifest
+    )
+    if local_maintenance:
+        if args.categorize and args.dry_run and args.apply:
+            print("ERROR: --dry-run and --apply are mutually exclusive with --categorize")
+            return 2
+        out_dir = _resolve_out_dir_early()
+        dry_run = not args.apply if args.categorize else args.dry_run
+        try:
+            with ExitStack() as leases:
+                if not dry_run:
+                    run_id = f"maintenance-{uuid.uuid4()}"
+                    # Protect the complete read/plan/write transaction. Imports also
+                    # serialize their destination manifest across unrelated libraries.
+                    scopes = [out_dir]
+                    if args.import_sm_manifest:
+                        scopes.append(logs_dir)
+                    acquired = set()
+                    for scope in scopes:
+                        physical = scope.resolve()
+                        if physical not in acquired:
+                            leases.enter_context(RunLock.acquire(physical, run_id))
+                            acquired.add(physical)
+                if args.strip_swarm_thumbnails:
+                    counts = strip_swarm_thumbnails(out_dir, dry_run=dry_run)
+                    print(f"strip-swarm-thumbnails: {counts}")
+                elif args.fix_swarm_architecture:
+                    counts = fix_swarm_architecture(out_dir, dry_run=dry_run)
+                    print(f"fix-swarm-architecture: {counts}")
+                elif args.categorize:
+                    from civitmatrix.categorize import apply_categorize, plan_categorize
+
+                    plan = plan_categorize(out_dir)
+                    by_bucket: dict[str, int] = {}
+                    for entry in plan:
+                        bucket = str(entry.get("toDir") or "?")
+                        by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
+                    print(
+                        f"categorize plan: {len(plan)} move(s)"
+                        + (f" {by_bucket}" if by_bucket else "")
+                        + (" (dry-run)" if dry_run else " (--apply)")
+                    )
+                    counts = apply_categorize(out_dir, plan, dry_run=dry_run)
+                    print(f"categorize: {counts}")
+                else:
+                    from civitmatrix.sm_parity import import_sm_manifest
+
+                    counts = import_sm_manifest(
+                        out_dir, logs_dir / "manifest.jsonl", dry_run=dry_run
+                    )
+                    print(f"import-sm-manifest: {counts}")
+                return 0 if counts.get("errors", 0) == 0 else 1
+        except RunLockError as exc:
+            print(f"ERROR: {exc}")
+            return 3
+
     if args.sm_parity:
         from civitmatrix.sm_parity import check_sm_parity, format_parity_summary
 
         report = check_sm_parity(_resolve_out_dir_early())
         print(format_parity_summary(report))
         return 0 if report.ok else 1
-
-    if args.import_sm_manifest:
-        from civitmatrix.sm_parity import import_sm_manifest
-
-        counts = import_sm_manifest(_resolve_out_dir_early(), logs_dir / "manifest.jsonl")
-        print(f"import-sm-manifest: {counts}")
-        return 0
 
     api_key = os.environ.get("CIVITAI_API_KEY", "").strip()
     logger = RunLogger(logs_dir)
@@ -541,13 +549,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     base_url = os.environ.get("CIVITAI_BASE_URL", "https://civitai.red").rstrip("/")
-    base_model = args.base_model or os.environ.get("BASE_MODEL", "Anima")
-    model_type = args.model_type or os.environ.get("MODEL_TYPE", "LORA")
-    sort = args.sort or os.environ.get("SORT", "Highest Rated")
-    checkpoint_type = args.checkpoint_type or "All"
-    updated_from = (args.updated_from or "").strip()
-    updated_to = (args.updated_to or "").strip()
-
     from civitmatrix.directories_config import load_directories, path_for_type
     from civitmatrix.filter_presets import FilterPresetError, load_filter_preset
     from civitmatrix.model_filters import is_all_filter, parse_csv_list
@@ -563,120 +564,64 @@ def main(argv: list[str] | None = None) -> int:
     job_manifest: dict = {}
     selection_map: dict[int, list] = {}
     if args.job_manifest:
-        import json as _json
+        import json
 
-        job_manifest = _json.loads(Path(args.job_manifest).read_text(encoding="utf-8"))
-        base_model = str(job_manifest.get("baseModel") or base_model)
-        model_type = str(job_manifest.get("type") or model_type)
-        sort = str(job_manifest.get("sort") or sort)
-        checkpoint_type = str(job_manifest.get("checkpointType") or checkpoint_type)
-        updated_from = str(job_manifest.get("updatedFrom") or updated_from).strip()
-        updated_to = str(job_manifest.get("updatedTo") or updated_to).strip()
+        job_manifest = json.loads(Path(args.job_manifest).read_text(encoding="utf-8"))
         for row in job_manifest.get("selection") or []:
             try:
                 selection_map[int(row["modelId"])] = list(row.get("versionIds") or ["latest"])
             except (KeyError, TypeError, ValueError):
                 continue
 
-    # Resolve out dir: --out > LORA_DIR > manifest outDir > directories.json > ./downloads/Lora
-    if args.out:
+    def resolve(cli_value, key, default):
+        # Presence, rather than truthiness, preserves explicit clearing values.
+        if cli_value is not None:
+            return cli_value
+        if key in job_manifest:
+            return job_manifest[key]
+        if key in preset:
+            return preset[key]
+        return default
+
+    def resolve_list(cli_value, key):
+        value = resolve(cli_value, key, [])
+        if isinstance(value, list):
+            return list(value)
+        return parse_csv_list(value)
+
+    base_model = str(resolve(args.base_model, "baseModel", os.environ.get("BASE_MODEL", "Anima")))
+    model_type = str(resolve(args.model_type, "type", os.environ.get("MODEL_TYPE", "LORA")))
+    sort = str(resolve(args.sort, "sort", os.environ.get("SORT", "Highest Rated")))
+    checkpoint_type = resolve(args.checkpoint_type, "checkpointType", "All")
+    updated_from = str(resolve(args.updated_from, "updatedFrom", "") or "").strip()
+    updated_to = str(resolve(args.updated_to, "updatedTo", "") or "").strip()
+    tag_include = resolve_list(args.tag_include, "tagInclude")
+    tag_exclude = resolve_list(args.tag_exclude, "tagExclude")
+    category = resolve(args.category, "category", "All")
+    users = resolve_list(args.users, "users")
+    users_deny = resolve_list(args.users_deny, "usersDeny")
+    file_format = resolve(args.file_format, "format", "All")
+    min_downloads = int(resolve(args.min_downloads, "minDownloads", 0) or 0)
+    min_likes = int(resolve(args.min_likes, "minLikes", 0) or 0)
+    base_only = bool(resolve(args.base_only, "baseOnly", False))
+    max_nsfw_level = resolve(args.max_nsfw_level, "maxNsfwLevel", None)
+    if max_nsfw_level is not None:
+        max_nsfw_level = int(max_nsfw_level)
+    nsfw = bool(resolve(args.nsfw, "nsfw", _env_bool("NSFW", True)))
+
+    if args.out is not None:
         out_dir = Path(args.out).expanduser()
+    elif "outDir" in job_manifest and job_manifest["outDir"]:
+        out_dir = Path(str(job_manifest["outDir"])).expanduser()
     elif os.environ.get("LORA_DIR"):
         out_dir = Path(os.environ["LORA_DIR"]).expanduser()
-    elif job_manifest.get("outDir"):
-        out_dir = Path(str(job_manifest["outDir"])).expanduser()
     else:
         dirs_cfg = load_directories(logs_dir / "directories.json")
         out_dir = path_for_type(dirs_cfg, model_type)
 
-    def _preset_list(key: str) -> list[str]:
-        raw = preset.get(key)
-        if isinstance(raw, list):
-            return [str(x) for x in raw if str(x).strip()]
-        return parse_csv_list(raw if isinstance(raw, str) else None)
-
-    tag_include = (
-        parse_csv_list(args.tag_include)
-        or list(job_manifest.get("tagInclude") or [])
-        or _preset_list("tagInclude")
-    )
-    tag_exclude = (
-        parse_csv_list(args.tag_exclude)
-        or list(job_manifest.get("tagExclude") or [])
-        or _preset_list("tagExclude")
-    )
-    category = args.category or job_manifest.get("category") or preset.get("category") or ""
-    users = (
-        parse_csv_list(args.users)
-        or list(job_manifest.get("users") or [])
-        or _preset_list("users")
-    )
-    users_deny = (
-        parse_csv_list(args.users_deny)
-        or list(job_manifest.get("usersDeny") or [])
-        or _preset_list("usersDeny")
-    )
-    file_format = args.file_format or job_manifest.get("format") or preset.get("format") or "All"
-
-    min_downloads = int(args.min_downloads or 0)
-    if not min_downloads and "minDownloads" in (job_manifest or {}):
-        try:
-            min_downloads = int(job_manifest.get("minDownloads") or 0)
-        except (TypeError, ValueError):
-            min_downloads = 0
-    if not min_downloads and preset.get("minDownloads") is not None:
-        try:
-            min_downloads = int(preset.get("minDownloads") or 0)
-        except (TypeError, ValueError):
-            min_downloads = 0
-
-    min_likes = int(args.min_likes or 0)
-    if not min_likes and "minLikes" in (job_manifest or {}):
-        try:
-            min_likes = int(job_manifest.get("minLikes") or 0)
-        except (TypeError, ValueError):
-            min_likes = 0
-    if not min_likes and preset.get("minLikes") is not None:
-        try:
-            min_likes = int(preset.get("minLikes") or 0)
-        except (TypeError, ValueError):
-            min_likes = 0
-
-    base_only = bool(args.base_only)
-    if not base_only and "baseOnly" in job_manifest:
-        base_only = bool(job_manifest.get("baseOnly"))
-    if not base_only and preset.get("baseOnly") is not None:
-        base_only = bool(preset.get("baseOnly"))
-
-    max_nsfw_level = args.max_nsfw_level
-    if max_nsfw_level is None and "maxNsfwLevel" in job_manifest:
-        raw_lvl = job_manifest.get("maxNsfwLevel")
-        if raw_lvl is not None and str(raw_lvl).strip() != "":
-            try:
-                max_nsfw_level = int(raw_lvl)
-            except (TypeError, ValueError):
-                max_nsfw_level = None
-    if max_nsfw_level is None and preset.get("maxNsfwLevel") is not None:
-        try:
-            max_nsfw_level = int(preset["maxNsfwLevel"])
-        except (TypeError, ValueError):
-            max_nsfw_level = None
-
-    if not updated_from and preset.get("updatedFrom"):
-        updated_from = str(preset.get("updatedFrom") or "").strip()
-    if not updated_to and preset.get("updatedTo"):
-        updated_to = str(preset.get("updatedTo") or "").strip()
-    if not args.checkpoint_type and not job_manifest.get("checkpointType") and preset.get(
-        "checkpointType"
-    ):
-        checkpoint_type = str(preset.get("checkpointType") or checkpoint_type)
-
     if not out_dir.is_absolute():
         out_dir = (root / out_dir).resolve()
     concurrency = args.concurrency or int(os.environ.get("MAX_CONCURRENT", "2"))
-    nsfw = args.nsfw if args.nsfw is not None else _env_bool("NSFW", True)
-    if "nsfw" in job_manifest:
-        nsfw = bool(job_manifest["nsfw"])
     match_base = (
         args.match_base_version
         if args.match_base_version is not None
@@ -736,6 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             keep_partials=keep_partials,
             refresh_sidecars=bool(args.refresh_sidecars),
             write_swarm=write_swarm,
+            allow_deletions=bool(args.allow_deletions),
         )
     return run_batch(
         client=client,
@@ -757,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         refresh_listing=bool(args.refresh_listing),
         disk_floor_gib=disk_floor_gib,
         keep_old_versions=bool(args.keep_old_versions),
+        allow_deletions=bool(args.allow_deletions),
         tag_include=tag_include,
         tag_exclude=tag_exclude,
         category=category,

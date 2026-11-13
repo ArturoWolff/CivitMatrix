@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,39 @@ def relative_pair_stem(out_dir: Path, path: Path, *, cm_info: bool = False) -> s
     return f"{rel_parent.as_posix()}/{name}"
 
 
+def iter_library_files(out_dir: Path, *, recursive: bool = False):
+    """Walk physical directories once, following aliases without following cycles.
+
+    Keep paths relative to the requested root so sibling weight/sidecar pairing
+    works for an external directory reached through a library symlink.
+    """
+    seen: set[tuple[int, int]] = set()
+    pending = [out_dir]
+    while pending:
+        directory = pending.pop()
+        try:
+            stat = directory.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            with os.scandir(directory) as scan:
+                entries = sorted(scan, key=lambda e: e.name.lower())
+        except OSError:
+            continue
+        children = []
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=True):
+                    if recursive:
+                        children.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=True):
+                    yield Path(entry.path)
+            except OSError:
+                continue
+        pending.extend(reversed(children))
+
+
 def iter_weight_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
     """List known weight files under ``out_dir`` (flat or recursive).
 
@@ -104,9 +138,9 @@ def iter_weight_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
     if not out_dir.is_dir():
         return []
     by_key: dict[tuple[Path, str], Path] = {}
-    globber = out_dir.rglob if recursive else out_dir.glob
+    files = list(iter_library_files(out_dir, recursive=recursive))
     for ext in WEIGHT_EXTENSIONS:
-        for p in globber(f"*{ext}"):
+        for p in files:
             if not p.is_file() or not _is_under(out_dir, p):
                 continue
             if p.suffix.lower() != ext:
@@ -121,9 +155,7 @@ def iter_cm_info_paths(out_dir: Path, *, recursive: bool = False) -> list[Path]:
     """List ``*.cm-info.json`` under ``out_dir`` (flat glob or recursive rglob)."""
     if not out_dir.is_dir():
         return []
-    paths = (
-        out_dir.rglob(f"*{CM_INFO_SUFFIX}") if recursive else out_dir.glob(f"*{CM_INFO_SUFFIX}")
-    )
+    paths = iter_library_files(out_dir, recursive=recursive)
     return sorted(
         p
         for p in paths
@@ -192,16 +224,68 @@ def load_local_index(
     return blake3s, version_ids, stems
 
 
+def cm_install_identity(data: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Publisher/file identity for non-destructive skip decisions.
+
+    This deliberately does not infer an author or a file variant from a hash.
+    Deletion callers additionally verify the actual payload before cleanup.
+    """
+    try:
+        mid, vid, fid = (int(data[k]) for k in ("ModelId", "VersionId", "RemoteFileId"))
+        if min(mid, vid, fid) <= 0:
+            return None
+        author, base, kind, name = (data.get(k) for k in
+            ("AuthorUsername", "BaseModel", "ModelType", "RemoteFileName"))
+        if any(not isinstance(v, str) or not v.strip() for v in (author, base, kind, name)):
+            return None
+        metadata = data.get("FileMetadata")
+        if (not isinstance(metadata, dict)
+                or not isinstance(metadata.get("format"), str)
+                or not metadata["format"].strip()
+                or any(metadata.get(k) is not None and not isinstance(metadata[k], str)
+                       for k in ("fp", "size"))):
+            return None
+        return (mid, vid, author.strip().casefold(), base.strip(), kind.strip(),
+                fid, name, str(metadata["format"]).casefold(),
+                metadata.get("fp"), metadata.get("size"), Path(name).suffix.lower())
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def load_local_install_identities(out_dir: Path) -> dict[tuple[Any, ...], str]:
+    """Index complete install provenance without hashing the library at startup."""
+    identities = {}
+    for path in iter_cm_info_paths(out_dir, recursive=True):
+        stem = relative_pair_stem(out_dir, path, cm_info=True)
+        weight = weight_path_for_stem(out_dir, stem)
+        try:
+            if weight is None or weight.stat().st_size <= 0:
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            identity = cm_install_identity(data)
+            hashes = data.get("Hashes")
+            digest = hashes.get("BLAKE3") if isinstance(hashes, dict) else None
+            if identity is not None and digest:
+                identities[identity] = str(digest).upper()
+        except (OSError, ValueError, TypeError):
+            continue
+    return identities
+
+
 def load_local_model_max_versions(
-    out_dir: Path, *, recursive: bool = True
-) -> dict[int, int]:
+    out_dir: Path, *, recursive: bool = True, by_base: bool = False
+) -> dict[Any, int]:
     """
     Return ModelId → max local VersionId from complete weight + cm-info pairs.
 
     Same completeness rules as ``load_local_index`` (non-empty weight beside a
     sidecar with both VersionId and Hashes.BLAKE3). Used by ``--update-only``.
     """
-    max_by_model: dict[int, int] = {}
+    # The unscoped form is retained for consumers displaying legacy summaries.
+    # Download decisions always request by_base=True, including "All" runs.
+    max_by_model: dict[Any, int] = {}
     if not out_dir.is_dir():
         return max_by_model
 
@@ -235,16 +319,22 @@ def load_local_model_max_versions(
             version_id = int(vid)
         except (TypeError, ValueError):
             continue
-        prev = max_by_model.get(model_id)
+        base = data.get("BaseModel")
+        if by_base and (not isinstance(base, str) or not base.strip()):
+            continue
+        key = (model_id, base.strip()) if by_base else model_id
+        prev = max_by_model.get(key)
         if prev is None or version_id > prev:
-            max_by_model[model_id] = version_id
+            max_by_model[key] = version_id
     return max_by_model
 
 
 def update_only_skip_reason(
     model_id: int | None,
     remote_version_id: int,
-    local_max_versions: dict[int, int],
+    local_max_versions: dict[Any, int],
+    *,
+    base_model: str | None = None,
 ) -> str | None:
     """
     Decide whether ``--update-only`` should skip this model/version.
@@ -253,7 +343,8 @@ def update_only_skip_reason(
     """
     if model_id is None:
         return "skip_not_installed"
-    local_max = local_max_versions.get(int(model_id))
+    key = (int(model_id), base_model.strip()) if base_model else int(model_id)
+    local_max = local_max_versions.get(key)
     if local_max is None:
         return "skip_not_installed"
     if int(remote_version_id) <= int(local_max):

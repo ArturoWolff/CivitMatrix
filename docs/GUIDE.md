@@ -106,7 +106,7 @@ These commands do **not** need `CIVITAI_API_KEY`. They read/write under `logs/`:
 - `job.json` — live status (`phase`: `running` · `paused` · `done` · `cancelled` · `error`; legacy `listing` / `downloading` still recognized)
 - `events.jsonl` — append-only event stream (`stream_start`, `listing_progress`, …)
 - `cancel.request` / `pause.request` — request flags
-- Output folder gets `.civitmatrix.lock` so two writers don’t collide
+- Output and shared-log directories use kernel-held writer leases, including overlapping directory aliases. Lock status files remain after release.
 
 Batch runs **stream** models as API pages arrive (phase `running`, `streamMode: true` in `job.json`). Workers stay bounded (`concurrency * 2` in flight) so large catalogs are not held in RAM. Skip / Range resume / BLAKE3 verify still apply per model — restarting a run does not re-download already verified files (local index is recursive under `--out`, so SM category subfolders still skip).
 
@@ -228,13 +228,21 @@ After each weight download (including Range resume), CivitMatrix hashes the file
 ./run.sh --cli --skip-verify        # opt out
 ```
 
-## Latest-only versions (default)
+## Historical versions and authorized cleanup
 
-CivitMatrix keeps **one version per model**: the newest matching base-model version.
+CivitMatrix preserves historical versions by default. Different releases, authors,
+base models and file variants remain distinct even when their payloads match.
+Neither an installed-file skip nor a pending worker reservation authorizes pruning.
 
-- After `skip_hash` / `skip_version` / successful download+verify, older local stems with the same `ModelId` (weight + `.cm-info.json` + `.swarm.json` + preview) are deleted.
-- Event: `prune_old_version`; job count: `pruned`.
-- Opt out: `./run.sh --cli --keep-old-versions`
+Optional old-version pruning requires both `--prune-old-versions` and
+`--allow-deletions`. Only genuinely older releases in a verified surviving file's
+publisher/base scope qualify. This operation is separate from duplicate cleanup:
+v1 and v2 are not duplicates. Review and authorize any cleanup before running it.
+
+Duplicate cleanup requires complete matching author/model/version/file identity
+and computed BLAKE3 equality. Missing identities, conflicting records, ambiguous
+formats and symlink files are preserved. `--keep-old-versions` remains supported
+and is the default. The UI does not enable deletion authorization.
 
 ## Update-only + SM library tools
 
@@ -245,7 +253,7 @@ Keep an existing folder current without downloading brand-new models:
 ./run.sh --cli --update-only --dry-run --limit 100
 ```
 
-Skips `skip_not_installed` / `skip_uptodate`; downloads only when the remote picked version is newer than the max local `VersionId` for that `ModelId`, then prunes older versions (unless `--keep-old-versions`).
+Skips `skip_not_installed` / `skip_uptodate`; downloads only when the remote picked version is newer than the maximum installed `VersionId` for that `ModelId` **and base model**. Historical versions remain installed unless cleanup is explicitly authorized.
 
 After a successful batch or heal, CivitMatrix logs an SM refresh reminder and emits `sm_refresh_hint`.
 
@@ -310,7 +318,7 @@ If index counts don’t match (`blake3` / `versions` / `stems`), some files are 
 ```bash
 ./run.sh --cli --heal --dry-run          # report what would change
 ./run.sh --cli --heal                    # repair incomplete .cm-info.json (+ preview)
-./run.sh --cli --heal --purge-orphans    # also delete sidecars with no matching weight
+./run.sh --cli --heal --purge-orphans    # report orphan cleanup without deleting by default
 ./run.sh --cli --heal --refresh-sidecars --write-swarm
 # re-fetch API metadata for complete installs; rewrite SourceUrl + optional .swarm.json
 ```
@@ -340,10 +348,10 @@ What it does:
    (falls back to existing `VersionId` when by-hash 404s — common for some hosts)
 3. Rewrites `.cm-info.json` (always writing the computed local BLAKE3; sets `SourceUrl` when ids are known); writes `.swarm.json` only with `--write-swarm`; fetches a preview when missing
 4. With `--refresh-sidecars`, also re-fetches and rewrites complete installs that already have ModelId/VersionId
-5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): stage re-download + verify — never replace an existing non-empty weight with unverified CDN bytes. If there was **no** prior weight and CDN bytes never match the published BLAKE3, heal may keep that complete staging file and set `CivitMatrix.hashMismatchKept`. `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems (including orphan sidecars) are left alone.
-6. Unlinks empty weights but **keeps** the sidecar until a verified re-download succeeds; heal re-downloads only `.safetensors` / `.gguf` / `.sft` (never jpeg/zip fallbacks) into `{stem}{ext}.heal-new` with resume off
-7. Orphan sidecars (no matching `.safetensors` / `.gguf` / `.sft`): re-download if VersionId known, else report — or delete with `--purge-orphans`
-8. Unique-stem duplicates of the same ModelId+VersionId **and the same BLAKE3** (`foo`, `foo-v123`, `foo-v123-2`) are collapsed to the canonical stem. Names that look like unique-stem suffixes but have a different or missing hash are kept
+5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): existing weights are preserved unless replacement is explicitly authorized. Authorized replacements stage and verify the exact recorded file; they never replace it with unverified bytes or an unrelated primary variant. `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems are left alone.
+6. Existing empty files are preserved without deletion authorization. Authorized repair keeps the sidecar until a verified re-download succeeds; supported weight formats are `.safetensors` / `.gguf` / `.sft` (never jpeg/zip fallbacks).
+7. Orphan sidecars: re-download the exact recorded file when verifiable, otherwise report. Deleting an orphan requires both `--purge-orphans` and `--allow-deletions`.
+8. Unique-stem duplicates (`foo`, `foo-v123`, `foo-v123-2`) are proposed only when their actual bytes and complete publisher/file identity match. Deletion additionally requires `--allow-deletions`; distinct versions/authors or unknown identity are preserved.
 9. A by-hash API response must contain a file with the exact local BLAKE3. If it only returns an associated version (for example a checkpoint associated with a VAE), heal keeps the weight and reports it unresolved; it never substitutes that version's primary file.
 10. Local/private weights whose by-hash lookup **404s** get `CivitMatrix.hashUnresolved` so later heals do not re-query forever. Transport errors (429/timeouts) are not persisted; the next heal retries. `--refresh-sidecars` also retries `hashUnresolved`
 
@@ -366,7 +374,7 @@ Normal batch runs also print a richer index line, e.g.
 ### Conservative maintenance (no weight changes)
 
 Use this separate command when you want health checks and missing metadata filled
-without normal heal's duplicate pruning or weight replacement:
+without requesting any duplicate cleanup or weight replacement:
 
 ```bash
 python -m civitmatrix.maintenance /path/to/Models
@@ -376,7 +384,7 @@ python -m civitmatrix.maintenance /path/to/Models --civit --apply
 The default is read-only. Multiple roots are accepted; directory symlinks are
 followed once, including models stored on another drive. The command reports
 broken links, empty weights, partial downloads, malformed sidecars, and invalid
-SafeTensors headers/data offsets. These are structural checks, not a full tensor
+SafeTensors dtype/shape sizes and data offsets. These are structural checks, not a full tensor
 content or numerical-quality test. Legacy `.pth`, `.pt`, `.ckpt`, `.bin`, `.onnx`,
 and `.gguf` files are inventoried without executing or unpickling them.
 

@@ -46,7 +46,7 @@ On startup CivitMatrix scans the output directory **recursively** for:
 - existing weight stems (``.safetensors`` / ``.gguf``; basename reserved for naming)
 - BLAKE3 + `VersionId` from complete pairs (weight + matching `.cm-info.json` in the **same** directory)
 
-Already-present hashes/versions are skipped — including installs under SM category subfolders — safe to re-run after interruptions.
+Complete installs with matching publisher, model/version and file-variant identity are skipped, including directory aliases and SM category subfolders. Identical bytes from different releases remain separate installs. Skip decisions never prune files.
 
 ## After downloading
 
@@ -65,15 +65,17 @@ Re-scan the catalog but only pull **newer** versions of models you already have:
 ./run.sh --cli --update-only --dry-run --limit 50
 ```
 
-CivitMatrix builds `ModelId → max local VersionId` from recursive complete pairs (weight + `.cm-info.json`). For each listed model:
+CivitMatrix builds `(ModelId, BaseModel) → max local VersionId` from recursive complete pairs (weight + `.cm-info.json`). For each listed model:
 
 | Local state | Action |
 |-------------|--------|
 | ModelId not installed | `skip_not_installed` |
 | Remote picked version ≤ local max | `skip_uptodate` |
-| Remote picked version newer | download + prune older versions (unless `--keep-old-versions`) |
+| Remote picked version newer | download and preserve historical versions by default |
 
 Job meta includes `updateOnly: true`.
+
+Optional pruning requires both `--prune-old-versions` and `--allow-deletions`, a verified survivor and the same publisher/base scope. Distinct releases are not duplicates; duplicate cleanup requires matching author, version, file identity and actual BLAKE3.
 
 ## Parity check
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -13,6 +14,37 @@ from civitmatrix.rate_limit import BandwidthLimiter
 from civitmatrix.redact import redact_secrets
 
 DownloadEventFn = Callable[[str, dict[str, Any]], None]
+
+
+class DownloadIntegrityError(ValueError):
+    """The response cannot safely complete the requested file."""
+
+
+def _response_lengths(response: Any, offset: int) -> tuple[int | None, int | None]:
+    """Return expected response bytes and final size, validating range semantics."""
+    if response.headers.get("Content-Encoding", "identity").lower() not in {"", "identity"}:
+        raise DownloadIntegrityError("encoded download response cannot be byte-validated")
+    raw_length = response.headers.get("Content-Length")
+    length = None
+    if raw_length is not None:
+        if not re.fullmatch(r"[0-9]+", str(raw_length)):
+            raise DownloadIntegrityError("invalid Content-Length")
+        length = int(raw_length)
+    if response.status_code == 200:
+        return length, length
+    if response.status_code != 206:
+        response.raise_for_status()
+        raise DownloadIntegrityError(f"unexpected download status {response.status_code}")
+    match = re.fullmatch(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)", response.headers.get("Content-Range", ""))
+    if match is None:
+        raise DownloadIntegrityError("missing or invalid Content-Range")
+    start, end, total = map(int, match.groups())
+    if start != offset or end < start or end >= total or end != total - 1:
+        raise DownloadIntegrityError("Content-Range does not complete the requested range")
+    expected = end - start + 1
+    if length is not None and length != expected:
+        raise DownloadIntegrityError("Content-Length disagrees with Content-Range")
+    return expected, total
 
 
 class CivitClient:
@@ -167,6 +199,8 @@ class CivitClient:
         Uses a session without Authorization so redirects cannot leak the API key.
         Same-origin ``/api/download/...`` URLs receive ``?token=`` instead.
         """
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least one")
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".partial")
         url = self._download_url(url)
@@ -182,7 +216,7 @@ class CivitClient:
         for attempt in range(1, max_retries + 1):
             try:
                 existing = _file_size(tmp) if resume else 0
-                headers: dict[str, str] = {}
+                headers: dict[str, str] = {"Accept-Encoding": "identity"}
                 mode = "wb"
                 if existing > 0:
                     headers["Range"] = f"bytes={existing}-"
@@ -210,7 +244,8 @@ class CivitClient:
                         emit("download_restart", path=str(tmp), reason="http_416")
                         existing = 0
                         mode = "wb"
-                        headers = {}
+                        if attempt == max_retries:
+                            raise DownloadIntegrityError("range rejected and retry budget exhausted")
                         continue
 
                     if existing > 0 and r.status_code == 200:
@@ -218,29 +253,8 @@ class CivitClient:
                         mode = "wb"
                         emit("download_restart", path=str(tmp), reason="server_ignored_range")
 
-                    if r.status_code not in (200, 206):
-                        r.raise_for_status()
-
                     start_offset = existing if mode == "ab" else 0
-                    content_len = r.headers.get("Content-Length")
-                    total: int | None = None
-                    if content_len:
-                        try:
-                            cl = int(content_len)
-                            if r.status_code == 206 or start_offset > 0:
-                                total = start_offset + cl
-                            else:
-                                total = cl
-                        except ValueError:
-                            total = None
-                    cr = r.headers.get("Content-Range")
-                    if cr and "/" in cr:
-                        try:
-                            overall = cr.rsplit("/", 1)[-1]
-                            if overall != "*":
-                                total = int(overall)
-                        except ValueError:
-                            pass
+                    expected_bytes, total = _response_lengths(r, start_offset)
 
                     prog = DownloadProgress(
                         path=str(tmp),
@@ -252,12 +266,20 @@ class CivitClient:
                         prog.seed_bytes(start_offset)
                     prog.set_total(total)
 
+                    received = 0
                     with tmp.open(mode) as f:
                         for chunk in r.iter_content(chunk_size=1024 * 1024):
                             if chunk:
+                                received += len(chunk)
+                                if expected_bytes is not None and received > expected_bytes:
+                                    raise DownloadIntegrityError("download body exceeds its declared length")
                                 self.rate_limiter.acquire(len(chunk))
                                 f.write(chunk)
                                 prog.add(len(chunk))
+                    if expected_bytes is not None and received != expected_bytes:
+                        raise DownloadIntegrityError("download body is shorter than its declared length")
+                    if total is not None and _file_size(tmp) != total:
+                        raise DownloadIntegrityError("download does not match the complete file size")
                     prog.finish()
 
                 tmp.replace(dest)
@@ -273,6 +295,11 @@ class CivitClient:
                 raise
             except OriginMismatch:
                 raise
+            except DownloadIntegrityError:
+                tmp.unlink(missing_ok=True)
+                if attempt == max_retries:
+                    raise
+                time.sleep(min(2**attempt, 30))
             except Exception:
                 if attempt == max_retries:
                     raise

@@ -4,12 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-if [[ ! -d .venv ]]; then
+if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv
 fi
 PY="${ROOT}/.venv/bin/python"
-"$PY" -m pip install -q --upgrade pip
-"$PY" -m pip install -q -e .
+INSTALL_MANIFEST="${ROOT}/.venv/.civitmatrix-install-manifest"
+# Editable source changes are immediate; rebuild only when packaging changes or
+# the environment is incomplete. Publish the marker only after a successful install.
+if ! cmp -s pyproject.toml "$INSTALL_MANIFEST" || \
+   ! "$PY" -c 'import civitmatrix, requests, dotenv, blake3' >/dev/null 2>&1; then
+  "$PY" -m pip install -q -e .
+  cp pyproject.toml "$INSTALL_MANIFEST"
+fi
 
 mkdir -p logs downloads/Lora
 

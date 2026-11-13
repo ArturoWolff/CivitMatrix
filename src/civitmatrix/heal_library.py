@@ -223,18 +223,42 @@ def _bump_redownload_result(bump: Callable[[str], None], status: str) -> None:
         bump("heal_gated")
     elif status == "gone":
         bump("heal_remote_gone")
+    elif status == "replacement_requires_authorization":
+        bump("heal_replacement_proposed")
     elif status == "hash_mismatch_kept":
         bump("heal_hash_mismatch_kept")
     else:
         bump("heal_redownload_failed")
 
 
-def _pick_file_for_hash(version: dict[str, Any], blake3: str) -> dict[str, Any] | None:
+def _matches_recorded_file(
+    version: dict[str, Any], file_info: dict[str, Any], cm: dict[str, Any] | None,
+) -> bool:
+    """A content lookup cannot override known publisher/version/file identity."""
+    if not cm:
+        return True
+    actual_model_id = version.get("modelId") or (version.get("model") or {}).get("id")
+    for known, actual in ((cm.get("ModelId"), actual_model_id),
+                          (cm.get("VersionId"), version.get("id")),
+                          (cm.get("RemoteFileId"), file_info.get("id"))):
+        if known is not None:
+            try:
+                if int(known) != int(actual):
+                    return False
+            except (TypeError, ValueError):
+                return False
+    name = cm.get("RemoteFileName")
+    return not name or name == file_info.get("name")
+
+
+def _pick_file_for_hash(
+    version: dict[str, Any], blake3: str, existing_cm: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     files = version.get("files") or []
     target = blake3.upper()
     for f in files:
         h = (f.get("hashes") or {}).get("BLAKE3")
-        if h and str(h).upper() == target:
+        if h and str(h).upper() == target and _matches_recorded_file(version, f, existing_cm):
             return f
     # A by-hash response can reference a version whose files do not include
     # this weight (for example a VAE associated with a checkpoint). Never
@@ -371,6 +395,7 @@ def heal_library(
     write_swarm: bool = False,
     cancel_check: Callable[[], bool] | None = None,
     pause_wait: Callable[[], bool] | None = None,
+    allow_deletions: bool = False,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     diag = index_diagnostics(out_dir)
@@ -393,14 +418,16 @@ def heal_library(
             job.set_count(key, counts[key])
             job.set_count("processed", sum(counts.values()))
 
-    for cand in collapse_stem_collisions(out_dir, dry_run=dry_run):
+    for cand in collapse_stem_collisions(out_dir, dry_run=dry_run, allow_delete=allow_deletions):
         extra = str(cand.get("stem"))
         keep = cand.get("keepStem")
-        log(f"HEAL collapsed duplicate stem={extra} keep={keep}")
-        bump("heal_collapsed_duplicate")
+        deleted = bool(cand.get("deleted"))
+        action = "collapsed" if deleted else "proposed duplicate"
+        log(f"HEAL {action} stem={extra} keep={keep}")
+        bump("heal_collapsed_duplicate" if deleted else "heal_duplicate_proposed")
         if job:
             job.emit(
-                "heal_collapsed_duplicate",
+                "heal_collapsed_duplicate" if deleted else "heal_duplicate_proposed",
                 stem=extra,
                 keepStem=keep,
                 versionId=cand.get("versionId"),
@@ -443,7 +470,7 @@ def heal_library(
             if size <= 0:
                 log(f"HEAL bad weight (empty) stem={stem}")
                 version_id = cm.get("VersionId") if cm else None
-                if not dry_run:
+                if not dry_run and allow_deletions:
                     try:
                         weight.unlink(missing_ok=True)
                     except OSError:
@@ -462,6 +489,7 @@ def heal_library(
                         dry_run=dry_run,
                         write_swarm=write_swarm,
                         existing_cm=cm,
+                        allow_deletions=allow_deletions,
                     )
                     _bump_redownload_result(bump, status)
                 continue
@@ -485,6 +513,10 @@ def heal_library(
                 bump("heal_hash_mismatch_kept")
                 continue
             version_id = cm.get("VersionId") if cm else None
+            if purge_orphans and not allow_deletions:
+                log(f"HEAL orphan deletion requires authorization stem={stem}")
+                bump("heal_orphan_delete_proposed")
+                continue
             if purge_orphans:
                 log(f"HEAL purge orphan sidecar stem={stem}")
                 removed = _delete_weight_bundle(out_dir, stem, dry_run=dry_run)
@@ -507,6 +539,7 @@ def heal_library(
                         dry_run=dry_run,
                         write_swarm=write_swarm,
                         existing_cm=cm,
+                        allow_deletions=allow_deletions,
                     )
                     _bump_redownload_result(bump, status)
                 continue
@@ -591,6 +624,7 @@ def heal_library(
                 dry_run=dry_run,
                 write_swarm=write_swarm,
                 existing_cm=cm,
+                allow_deletions=allow_deletions,
             )
             _bump_redownload_result(bump, status)
             continue
@@ -644,7 +678,7 @@ def heal_library(
                 job.emit("heal_unresolved", stem=stem, blake3=local_hash)
             continue
 
-        file_info = _pick_file_for_hash(version, local_hash)
+        file_info = _pick_file_for_hash(version, local_hash, cm)
         if file_info is None:
             bump("heal_unresolved")
             continue
@@ -686,6 +720,7 @@ def heal_library(
                 dry_run=dry_run,
                 write_swarm=write_swarm,
                 existing_cm=cm,
+                allow_deletions=allow_deletions,
             )
             _bump_redownload_result(bump, status)
             continue
@@ -780,7 +815,14 @@ def _pick_redownload_file(
     stem: str,
 ) -> dict[str, Any] | None:
     """Pick a known weight file; never jpeg/zip fallbacks."""
-    files = [f for f in (version.get("files") or []) if isinstance(f, dict)]
+    files = [f for f in (version.get("files") or [])
+             if isinstance(f, dict) and _matches_recorded_file(version, f, existing_cm)]
+    remote_id = (existing_cm or {}).get("RemoteFileId")
+    if remote_id is not None:
+        for file in files:
+            if str(file.get("id")) == str(remote_id) and is_indexed_weight_name(str(file.get("name") or "")):
+                return file
+        return None
     recorded = ((existing_cm or {}).get("Hashes") or {}).get("BLAKE3")
     if recorded:
         target = str(recorded).upper()
@@ -790,27 +832,15 @@ def _pick_redownload_file(
                 str(f.get("name") or "")
             ):
                 return f
-    wp = weight_path_for_stem(out_dir, stem)
-    local_ext = wp.suffix.lower() if wp is not None else None
-    if local_ext:
-        ext_matches = [
-            f
-            for f in files
-            if str(f.get("name") or "").lower().endswith(local_ext)
-            and is_indexed_weight_name(str(f.get("name") or ""))
-        ]
-        for f in ext_matches:
-            if f.get("primary"):
-                return f
-        if ext_matches:
-            return ext_matches[0]
-    picked = pick_primary_file(version)
-    if picked and is_indexed_weight_name(str(picked.get("name") or "")):
-        return picked
-    for f in files:
-        if is_indexed_weight_name(str(f.get("name") or "")):
-            return f
-    return None
+    remote_name = (existing_cm or {}).get("RemoteFileName")
+    if remote_name:
+        matches = [f for f in files if f.get("name") == remote_name
+                   and is_indexed_weight_name(str(f.get("name") or ""))]
+        return matches[0] if len(matches) == 1 else None
+    # Without reliable file identity, a primary/extension fallback can replace
+    # a different quantization or variant. Only a single unambiguous file is safe.
+    weights = [f for f in files if is_indexed_weight_name(str(f.get("name") or ""))]
+    return weights[0] if len(weights) == 1 and not recorded else None
 
 
 def _redownload_version(
@@ -824,12 +854,18 @@ def _redownload_version(
     dry_run: bool,
     write_swarm: bool = False,
     existing_cm: dict[str, Any] | None = None,
+    allow_deletions: bool = False,
 ) -> str:
     """
     Re-download a version into ``stem``. Returns status:
     ``ok`` | ``gated`` | ``gone`` | ``hash_mismatch_kept`` | ``failed``.
     Never deletes an existing weight on failure.
     """
+    existing = weight_path_for_stem(out_dir, stem)
+    if existing is not None and not allow_deletions:
+        log(f"HEAL replacement requires authorization stem={stem}")
+        return "replacement_requires_authorization"
+
     from civitmatrix.redact import redact_secrets
 
     try:
@@ -859,9 +895,13 @@ def _redownload_version(
     if file_info is None:
         return "failed"
 
-    download_url = file_info.get("downloadUrl") or (
-        f"{client.base_url}/api/download/models/{version_id}"
-    )
+    # An ID match does not make the release-primary endpoint address this file.
+    # Missing per-file URLs must preserve the existing variant, even if the API
+    # also omits its hash and verification would otherwise be skipped.
+    download_url = file_info.get("downloadUrl")
+    if not isinstance(download_url, str) or not download_url.strip():
+        log(f"HEAL exact file download URL unavailable stem={stem}; preserving local")
+        return "failed"
     remote_name = file_info.get("name") or f"model-{version_id}.safetensors"
     ext = weight_suffix_from_name(str(remote_name))
     weight_path = out_dir / f"{stem}{ext}"

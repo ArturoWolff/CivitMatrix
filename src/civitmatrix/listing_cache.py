@@ -21,6 +21,8 @@ def make_cache_key(
     model_type: str,
     sort: str,
     nsfw: bool,
+    username: str | None = None,
+    checkpoint_type: str | None = None,
 ) -> str:
     payload = {
         "baseUrl": base_url.rstrip("/"),
@@ -28,6 +30,8 @@ def make_cache_key(
         "modelType": model_type,
         "sort": sort,
         "nsfw": bool(nsfw),
+        "username": username,
+        "checkpointType": checkpoint_type,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
@@ -46,6 +50,8 @@ def probe_cache(
     model_type: str,
     sort: str,
     nsfw: bool,
+    username: str | None = None,
+    checkpoint_type: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     key = make_cache_key(
         base_url=base_url,
@@ -53,6 +59,8 @@ def probe_cache(
         model_type=model_type,
         sort=sort,
         nsfw=nsfw,
+        username=username,
+        checkpoint_type=checkpoint_type,
     )
     meta_path, jsonl_path = cache_paths(logs_dir, key)
     if not meta_path.is_file() or not jsonl_path.is_file():
@@ -61,12 +69,16 @@ def probe_cache(
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if not isinstance(meta, dict):
             return "corrupt", None
+        if meta.get("v") != 2:
+            return "mismatch", None
         expected = {
             "baseUrl": base_url.rstrip("/"),
             "baseModel": base_model,
             "modelType": model_type,
             "sort": sort,
             "nsfw": bool(nsfw),
+            "username": username,
+            "checkpointType": checkpoint_type,
         }
         got = meta.get("key") or {}
         if got != expected:
@@ -129,7 +141,7 @@ class ListingCacheWriter:
         key_fields: dict[str, Any],
     ) -> None:
         self.key = key
-        self.key_fields = dict(key_fields)
+        self.key_fields = {"username": None, "checkpointType": None, **key_fields}
         self.meta_path, self.jsonl_path = cache_paths(logs_dir, key)
         self.pages = 0
         self.items = 0
@@ -167,7 +179,7 @@ class ListingCacheWriter:
 
     def _write_meta(self, *, complete: bool) -> dict[str, Any]:
         meta = {
-            "v": 1,
+            "v": 2,
             "key": self.key_fields,
             "builtAt": _utc_now(),
             "complete": bool(complete),

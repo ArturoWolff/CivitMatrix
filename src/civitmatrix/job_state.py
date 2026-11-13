@@ -15,13 +15,13 @@ def _utc_now() -> str:
 
 
 class JobState:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, run_id: str | None = None) -> None:
         self.path = path
         self.events_path = path.parent / "events.jsonl"
         self._lock = threading.Lock()
         self._event_lock = threading.Lock()
         self._data: dict[str, Any] = {
-            "runId": str(uuid.uuid4()),
+            "runId": run_id or str(uuid.uuid4()),
             "phase": "starting",
             "counts": {},
             "current": None,

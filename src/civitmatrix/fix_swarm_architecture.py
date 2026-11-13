@@ -71,6 +71,7 @@ def fix_swarm_architecture(out_dir: Path, *, dry_run: bool = False) -> dict[str,
     Set ``modelspec.architecture`` on ``*.swarm.json`` from local ``*.cm-info.json``.
 
     Never touches ``.safetensors`` or previews. No API calls.
+    Callers must hold the library RunLock when writing.
     """
     counts = {
         "scanned": 0,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import functools
 import threading
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from civitmatrix.disk_guard import (
     format_bytes,
 )
 from civitmatrix.indexer import (
+    cm_install_identity,
+    load_local_install_identities,
     pick_matching_version,
     pick_primary_file,
     unique_stem,
@@ -32,6 +35,32 @@ from civitmatrix.verify_blake3 import (
 from civitmatrix.version_prune import collapse_stem_collisions, prune_old_versions
 
 _index_lock = threading.Lock()
+
+# Serialize one model's installs without treating an in-flight reservation as
+# an installed file. Different models can still download concurrently.
+_model_locks_guard = threading.Lock()
+_model_locks: dict[tuple[str, str], tuple[threading.RLock, int]] = {}
+
+
+def _serialize_model_install(fn):
+    @functools.wraps(fn)
+    def serialized(client, model, out_dir, *args, **kwargs):
+        key = (str(out_dir.resolve()), str(model.get("id")))
+        with _model_locks_guard:
+            lock, users = _model_locks.get(key, (threading.RLock(), 0))
+            _model_locks[key] = (lock, users + 1)
+        try:
+            with lock:
+                return fn(client, model, out_dir, *args, **kwargs)
+        finally:
+            with _model_locks_guard:
+                _, users = _model_locks[key]
+                if users == 1:
+                    del _model_locks[key]
+                else:
+                    _model_locks[key] = (lock, users - 1)
+    return serialized
+
 
 def _resolve_versions(
     model: dict[str, Any],
@@ -97,8 +126,10 @@ def maybe_prune_old_versions(
     logger: RunLogger,
     job: JobState | None,
     keep_stem: str = "",
+    allow_deletions: bool = False,
+    local_install_identities: dict[tuple[Any, ...], str] | None = None,
 ) -> int:
-    if dry_run:
+    if dry_run or not allow_deletions:
         return 0
     mid = model.get("id")
     if mid is None:
@@ -117,6 +148,9 @@ def maybe_prune_old_versions(
             local_versions=local_versions,
             local_stems=local_stems,
             index_lock=_index_lock,
+            allow_delete=True,
+            base_model=version.get("baseModel"),
+            keep_stem=keep_stem or None,
         )
         for cand in pruned:
             logger.log(
@@ -133,6 +167,12 @@ def maybe_prune_old_versions(
                 )
                 job.bump("pruned")
         n += len(pruned)
+        if pruned and local_install_identities is not None:
+            remaining = load_local_install_identities(out_dir)
+            with _index_lock:
+                for identity in list(local_install_identities):
+                    if identity[0] == model_id and identity not in remaining:
+                        del local_install_identities[identity]
     collapsed = collapse_stem_collisions(
         out_dir,
         model_id,
@@ -141,6 +181,7 @@ def maybe_prune_old_versions(
         local_stems=local_stems,
         index_lock=_index_lock,
         keep_stem=keep_stem or None,
+        allow_delete=True,
     )
     for cand in collapsed:
         logger.log(
@@ -161,6 +202,7 @@ def maybe_prune_old_versions(
     return n
 
 
+@_serialize_model_install
 def process_one(
     client: CivitClient,
     model: dict[str, Any],
@@ -177,11 +219,13 @@ def process_one(
     resume: bool = True,
     skip_verify: bool = False,
     disk_floor_bytes: int = 0,
-    keep_old_versions: bool = False,
+    keep_old_versions: bool = True,
     force_version: dict[str, Any] | None = None,
     write_swarm: bool = False,
     update_only: bool = False,
-    local_max_versions: dict[int, int] | None = None,
+    local_max_versions: dict[Any, int] | None = None,
+    allow_deletions: bool = False,
+    local_install_identities: dict[tuple[Any, ...], str] | None = None,
 ) -> str:
     version = force_version or pick_matching_version(
         model, base_model, match_base_version=match_base_version
@@ -226,6 +270,18 @@ def process_one(
     version_id = int(version["id"])
     skip_reason: str | None = None
     stem = ""
+    metadata = file_info.get("metadata") or {}
+    identity = cm_install_identity({
+        "ModelId": model.get("id"), "VersionId": version_id,
+        "BaseModel": version.get("baseModel"),
+        "AuthorUsername": (model.get("creator") or {}).get("username"),
+        "ModelType": model.get("type") or "LORA",
+        "RemoteFileId": file_info.get("id"), "RemoteFileName": file_info.get("name"),
+        "FileMetadata": {"format": metadata.get("format") or "SafeTensor",
+                         "fp": metadata.get("fp"), "size": metadata.get("size")},
+    })
+    installed = (local_install_identities if local_install_identities is not None
+                 else load_local_install_identities(out_dir))
 
     mid_raw = model.get("id")
     try:
@@ -235,43 +291,26 @@ def process_one(
 
     if update_only:
         max_map = local_max_versions if local_max_versions is not None else {}
-        uo_skip = update_only_skip_reason(model_id_int, version_id, max_map)
+        uo_skip = update_only_skip_reason(model_id_int, version_id, max_map,
+                                         base_model=version.get("baseModel"))
         if uo_skip:
             if job:
                 fields = dict(_model_fields(model, version))
                 if uo_skip == "skip_uptodate" and model_id_int is not None:
-                    fields["localVersionId"] = max_map.get(model_id_int)
+                    fields["localVersionId"] = max_map.get((model_id_int, version.get("baseModel")))
                 job.emit(uo_skip, **fields)
-            # Only prune when we already have this (or newer) version locally.
-            if uo_skip == "skip_uptodate" and model_id_int is not None:
-                keep_vid = max_map.get(model_id_int, version_id)
-                maybe_prune_old_versions(
-                    enabled=not keep_old_versions,
-                    dry_run=dry_run,
-                    out_dir=out_dir,
-                    model=model,
-                    version=version,
-                    version_id=keep_vid,
-                    local_blake3=local_blake3,
-                    local_versions=local_versions,
-                    local_stems=local_stems,
-                    logger=logger,
-                    job=job,
-                )
             return uo_skip
 
     with _index_lock:
-        if blake3 and blake3.upper() in local_blake3:
+        recorded = installed.get(identity) if identity is not None else None
+        if recorded and blake3 and str(blake3).upper() == recorded:
             skip_reason = "skip_hash"
-        elif version_id in local_versions:
+        elif recorded and not blake3:
             skip_reason = "skip_version"
         else:
             stem = unique_stem(Path(remote_name).stem, version_id, local_stems)
             if not dry_run:
                 local_stems.add(stem.lower())
-                local_versions.add(version_id)
-                if blake3:
-                    local_blake3.add(blake3.upper())
 
     if skip_reason:
         if job:
@@ -279,30 +318,27 @@ def process_one(
             if skip_reason == "skip_hash" and blake3:
                 fields["blake3"] = blake3
             job.emit(skip_reason, **fields)
-        maybe_prune_old_versions(
-            enabled=not keep_old_versions,
-            dry_run=dry_run,
-            out_dir=out_dir,
-            model=model,
-            version=version,
-            version_id=version_id,
-            local_blake3=local_blake3,
-            local_versions=local_versions,
-            local_stems=local_stems,
-            logger=logger,
-            job=job,
-        )
         return skip_reason
+
+    # The version endpoint selects the release primary, which can differ from
+    # our preferred SafeTensor or an explicitly identified file variant.
+    download_url = file_info.get("downloadUrl")
+    if not isinstance(download_url, str) or not download_url.strip():
+        if not dry_run:
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
+        logger.fail_with_event(
+            job, model, "missing_file_download_url", retryable=False,
+            version=version, **_model_fields(model, version),
+        )
+        return "no_files"
 
     ext = weight_suffix_from_name(str(remote_name))
     weight_path = out_dir / f"{stem}{ext}"
     info_path = out_dir / f"{stem}.cm-info.json"
     preview_tmp = out_dir / f"{stem}.preview.download"
     preview_path: Path | None = None
-
-    download_url = file_info.get("downloadUrl") or (
-        f"{client.base_url}/api/download/models/{version_id}"
-    )
 
     preview_url = pick_preview_url(version.get("images") or [])
 
@@ -436,10 +472,6 @@ def process_one(
                         remoteBlake3=blake3,
                         **_model_fields(model, version),
                     )
-                with _index_lock:
-                    if blake3:
-                        local_blake3.discard(str(blake3).upper())
-                    local_blake3.add(str(local_hash).upper())
                 blake3 = str(local_hash).upper()
                 hashes = dict(file_info.get("hashes") or {})
                 hashes["BLAKE3"] = blake3
@@ -493,9 +525,6 @@ def process_one(
             )
             weight_path.unlink(missing_ok=True)
             preview_tmp.unlink(missing_ok=True)
-            _release_reservation(
-                local_blake3, local_versions, local_stems, blake3, version_id, stem
-            )
             logger.fail_with_event(
                 job,
                 model,
@@ -542,6 +571,13 @@ def process_one(
                     json.dumps(swarm, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
+        with _index_lock:
+            local_versions.add(version_id)
+            if blake3:
+                local_blake3.add(str(blake3).upper())
+                if identity is not None:
+                    installed[identity] = str(blake3).upper()
+
         logger.append_jsonl(
             logger.manifest_path,
             {
@@ -576,9 +612,10 @@ def process_one(
             )
         if local_max_versions is not None and model_id_int is not None:
             with _index_lock:
-                prev = local_max_versions.get(model_id_int)
+                key = (model_id_int, version.get("baseModel"))
+                prev = local_max_versions.get(key)
                 if prev is None or version_id > prev:
-                    local_max_versions[model_id_int] = version_id
+                    local_max_versions[key] = version_id
         maybe_prune_old_versions(
             enabled=not keep_old_versions,
             dry_run=False,
@@ -592,13 +629,11 @@ def process_one(
             logger=logger,
             job=job,
             keep_stem=stem,
+            allow_deletions=allow_deletions,
+            local_install_identities=installed,
         )
         return "ok"
     except PermissionError as e:
-        if not weight_committed:
-            _release_reservation(
-                local_blake3, local_versions, local_stems, blake3, version_id, stem
-            )
         logger.fail_with_event(
             job,
             model,
@@ -618,10 +653,6 @@ def process_one(
             )
         return "forbidden"
     except FileNotFoundError as e:
-        if not weight_committed:
-            _release_reservation(
-                local_blake3, local_versions, local_stems, blake3, version_id, stem
-            )
         logger.fail_with_event(
             job,
             model,
@@ -641,10 +672,6 @@ def process_one(
             )
         return "not_found"
     except Exception as e:
-        if not weight_committed:
-            _release_reservation(
-                local_blake3, local_versions, local_stems, blake3, version_id, stem
-            )
         logger.fail_with_event(
             job,
             model,
@@ -666,6 +693,13 @@ def process_one(
                 f"WARN keeping verified weight after error stem={stem}: {e!r}"
             )
         return "error"
+    finally:
+        # Error logging may block or fail. No other model may reuse this name
+        # until every possible path deletion by this worker has finished.
+        if not weight_committed:
+            _release_reservation(
+                local_blake3, local_versions, local_stems, blake3, version_id, stem
+            )
 
 
 def _release_reservation(
@@ -678,8 +712,5 @@ def _release_reservation(
 ) -> None:
     with _index_lock:
         local_stems.discard(stem.lower())
-        local_versions.discard(version_id)
-        if blake3:
-            local_blake3.discard(blake3.upper())
 
 

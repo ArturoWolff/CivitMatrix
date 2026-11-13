@@ -8,13 +8,15 @@ import os
 import secrets
 import subprocess
 import sys
+import stat
+import tempfile
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
@@ -54,7 +56,7 @@ MUTATING_POST = {
     "/api/filter-presets",
 }
 
-_run_lock = threading.Lock()
+_run_lock = threading.RLock()
 _run_proc: subprocess.Popen[str] | None = None
 _session_token: str | None = None
 _fail_count_cache: tuple[float, int, int] | None = None  # mtime, size, count
@@ -370,24 +372,33 @@ def _cli_has_option(flag: str) -> bool:
     return False
 
 
-def _spawn_run(argv: list[str], root: Path) -> dict[str, Any]:
+def _spawn_run(
+    argv: list[str], root: Path, *, before_spawn: Callable[[], None] | None = None
+) -> dict[str, Any]:
     global _run_proc
     with _run_lock:
         if _run_proc is not None and _run_proc.poll() is None:
-            return {"error": "a run is already active", "pid": _run_proc.pid}
+            return {"ok": False, "error": "a run is already active", "pid": _run_proc.pid}
+        if before_spawn is not None:
+            before_spawn()
         logs = root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         run_log_path = logs / "ui-run.log"
-        run_log = open(run_log_path, "a", encoding="utf-8")  # noqa: SIM115
-        run_log.write(f"\n--- spawn {' '.join(argv)} ---\n")
-        run_log.flush()
-        _run_proc = subprocess.Popen(
-            [sys.executable, "-m", "civitmatrix", *argv],
-            cwd=str(root),
-            env=os.environ.copy(),
-            stdout=run_log,
-            stderr=subprocess.STDOUT,
-        )
+        with run_log_path.open("a", encoding="utf-8") as run_log:
+            run_log.write(f"\n--- spawn {' '.join(argv)} ---\n")
+            run_log.flush()
+            _run_proc = subprocess.Popen(
+                [sys.executable, "-m", "civitmatrix", *argv],
+                cwd=str(root),
+                env=os.environ.copy(),
+                stdout=run_log,
+                stderr=subprocess.STDOUT,
+            )
+            # Keep the admitted immutable input with its child, never in LORA_DIR.
+            _run_proc._civitmatrix_manifest = (  # type: ignore[attr-defined]
+                Path(argv[argv.index("--job-manifest") + 1])
+                if "--job-manifest" in argv else None
+            )
         # Catch immediate CLI crashes (import/argparse) so the UI can show them.
         time.sleep(0.35)
         code = _run_proc.poll()
@@ -500,11 +511,38 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            request_resume_cli(p["logs"], p["job"])
             argv = ["--cli", "--retry-failed", "--concurrency", "2"]
             if isinstance(body, dict) and body.get("writeSwarm"):
                 argv.append("--write-swarm")
-            out = _spawn_run(argv, p["root"])
+            def prepare_retry() -> None:
+                try:
+                    job = json.loads(p["job"].read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    job = {}
+                if not isinstance(job, dict):
+                    job = {}
+                manifest_path = getattr(_run_proc, "_civitmatrix_manifest", None)
+                manifest = {}
+                if isinstance(manifest_path, Path) and manifest_path.parent == p["logs"]:
+                    try:
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                if not isinstance(manifest, dict):
+                    manifest = {}
+                # A CLI-created status may supersede the last UI child's context.
+                if manifest and all(
+                    key not in job or job[key] == manifest.get(saved)
+                    for key, saved in (("outDir", "outDir"), ("modelType", "type"), ("baseModel", "baseModel"), ("sort", "sort"))
+                ):
+                    argv.extend(["--job-manifest", str(manifest_path), "--out", str(manifest["outDir"])])
+                else:
+                    for key, flag in (("outDir", "--out"), ("modelType", "--type"), ("baseModel", "--base-model"), ("sort", "--sort")):
+                        if isinstance(job.get(key), str) and job[key]:
+                            argv.extend([flag, job[key]])
+                request_resume_cli(p["logs"], p["job"])
+
+            out = _spawn_run(argv, p["root"], before_spawn=prepare_retry)
             if out.get("ok") is not False:
                 out["message"] = f"Retrying {n} failed model(s)."
             _json_response(self, 200, out)
@@ -591,67 +629,82 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in kv.items():
             if k not in seen:
                 out.append(f"{k}={v}")
-        tmp = env_path.with_suffix(".tmp")
-        tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
-        tmp.replace(env_path)
+        mode = 0o600
+        if env_path.exists():
+            mode &= stat.S_IMODE(env_path.stat().st_mode)
+        fd, name = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=root)
+        tmp = Path(name)
+        try:
+            os.chmod(tmp, mode)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(out) + "\n")
+            tmp.replace(env_path)
+        finally:
+            tmp.unlink(missing_ok=True)
         os.environ.update(kv)
 
     def _start_run(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
-        dirs = load_directories(p["dirs"])
-        model_type = str(body.get("type") or "All")
-        out_dir = path_for_type(dirs, model_type)
-        os.environ["LORA_DIR"] = str(out_dir)
-        selection = body.get("selection") or []
-        download_all = bool(body.get("downloadAll"))
-        if download_all:
-            selection = []
-        manifest = {
-            "type": model_type,
-            "baseModel": body.get("baseModel") or "All",
-            "sort": body.get("sort") or "Highest Rated",
-            "nsfw": bool(body.get("nsfw", True)),
-            "tagInclude": parse_csv_list(body.get("tagInclude")),
-            "tagExclude": parse_csv_list(body.get("tagExclude")),
-            "category": body.get("category"),
-            "users": parse_csv_list(body.get("users")),
-            "usersDeny": parse_csv_list(body.get("usersDeny")),
-            "format": body.get("format"),
-            "checkpointType": body.get("checkpointType") or "All",
-            "updatedFrom": body.get("updatedFrom") or "",
-            "updatedTo": body.get("updatedTo") or "",
-            "minDownloads": int(body.get("minDownloads") or 0),
-            "minLikes": int(body.get("minLikes") or 0),
-            "baseOnly": bool(body.get("baseOnly")),
-            "maxNsfwLevel": _parse_optional_int(body.get("maxNsfwLevel")),
-            "outDir": str(out_dir),
-            "selection": selection,
-            "downloadAll": download_all,
-        }
-        p["manifest"].write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        argv = [
-            "--cli",
-            "--job-manifest",
-            str(p["manifest"]),
-            "--concurrency",
-            str(body.get("concurrency") or 2),
-            "--out",
-            str(out_dir),
-        ]
-        if body.get("dryRun"):
-            argv.append("--dry-run")
-        if body.get("keepOldVersions"):
-            argv.append("--keep-old-versions")
-        if body.get("writeSwarm"):
-            argv.append("--write-swarm")
-        if body.get("updateOnly"):
-            if not _cli_has_option("--update-only"):
+        with _run_lock:
+            if _run_proc is not None and _run_proc.poll() is None:
+                return {"ok": False, "error": "a run is already active", "pid": _run_proc.pid}
+            if body.get("updateOnly") and not _cli_has_option("--update-only"):
                 return {
                     "ok": False,
                     "missingCli": True,
                     "error": "CLI --update-only is not available in this build yet.",
                 }
-            argv.append("--update-only")
-        return _spawn_run(argv, p["root"])
+            dirs = load_directories(p["dirs"])
+            model_type = str(body.get("type") or "All")
+            out_dir = path_for_type(dirs, model_type)
+            selection = body.get("selection") or []
+            download_all = bool(body.get("downloadAll"))
+            if download_all:
+                selection = []
+            manifest = {
+                "type": model_type,
+                "baseModel": body.get("baseModel") or "All",
+                "sort": body.get("sort") or "Highest Rated",
+                "nsfw": bool(body.get("nsfw", True)),
+                "tagInclude": parse_csv_list(body.get("tagInclude")),
+                "tagExclude": parse_csv_list(body.get("tagExclude")),
+                "category": body.get("category"),
+                "users": parse_csv_list(body.get("users")),
+                "usersDeny": parse_csv_list(body.get("usersDeny")),
+                "format": body.get("format"),
+                "checkpointType": body.get("checkpointType") or "All",
+                "updatedFrom": body.get("updatedFrom") or "",
+                "updatedTo": body.get("updatedTo") or "",
+                "minDownloads": int(body.get("minDownloads") or 0),
+                "minLikes": int(body.get("minLikes") or 0),
+                "baseOnly": bool(body.get("baseOnly")),
+                "maxNsfwLevel": _parse_optional_int(body.get("maxNsfwLevel")),
+                "outDir": str(out_dir),
+                "selection": selection,
+                "downloadAll": download_all,
+            }
+            p["logs"].mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix="ui-job-", suffix=".json", dir=p["logs"])
+            manifest_path = Path(name)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(manifest, stream, indent=2)
+            argv = [
+                "--cli",
+                "--job-manifest",
+                str(manifest_path),
+                "--concurrency",
+                str(body.get("concurrency") or 2),
+                "--out",
+                str(out_dir),
+            ]
+            if body.get("dryRun"):
+                argv.append("--dry-run")
+            if body.get("keepOldVersions"):
+                argv.append("--keep-old-versions")
+            if body.get("writeSwarm"):
+                argv.append("--write-swarm")
+            if body.get("updateOnly"):
+                argv.append("--update-only")
+            return _spawn_run(argv, p["root"])
 
     def _start_categorize(self, body: dict[str, Any], p: dict[str, Path]) -> dict[str, Any]:
         if not _cli_has_option("--categorize"):
@@ -663,7 +716,6 @@ class Handler(BaseHTTPRequestHandler):
         dirs = load_directories(p["dirs"])
         model_type = str(body.get("type") or "LORA")
         out_dir = path_for_type(dirs, model_type)
-        os.environ["LORA_DIR"] = str(out_dir)
         argv = ["--cli", "--categorize", "--out", str(out_dir)]
         # CLI defaults to dry-run plan; --apply performs moves.
         if body.get("apply"):
@@ -674,7 +726,6 @@ class Handler(BaseHTTPRequestHandler):
         dirs = load_directories(p["dirs"])
         model_type = str(body.get("type") or "LORA")
         out_dir = path_for_type(dirs, model_type)
-        os.environ["LORA_DIR"] = str(out_dir)
         argv = ["--cli", "--heal", "--out", str(out_dir)]
         if body.get("refreshSidecars"):
             argv.append("--refresh-sidecars")

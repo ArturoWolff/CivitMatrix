@@ -37,6 +37,7 @@ logs/pause.request.tmp
 logs/listing-cache/
 logs/filter-presets/
 logs/archive/
+logs/audit-*/
 !logs/.gitkeep
 downloads/
 *.partial
@@ -62,4 +63,5 @@ Thumbs.db
 *~
 logs/directories.json
 logs/ui_job_manifest.json
+logs/ui-job-*.json
 logs/.ui-session

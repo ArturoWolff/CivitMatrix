@@ -44,7 +44,7 @@ class HealSftAndDuplicateTests(unittest.TestCase):
             self.assertIsNone(counts.get("heal_redownloaded"))
             client.download.assert_not_called()
 
-    def test_collapses_unique_stem_sft_duplicates_without_redownload(self) -> None:
+    def test_unknown_author_sft_duplicates_are_preserved_without_redownload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
             for stem in ("arale_test_2", "arale_test_2-v9", "arale_test_2-v9-2"):
@@ -62,14 +62,15 @@ class HealSftAndDuplicateTests(unittest.TestCase):
                 log=lambda _m: None,
                 dry_run=False,
             )
-            self.assertGreaterEqual(counts.get("heal_collapsed_duplicate") or 0, 2)
+            self.assertIsNone(counts.get("heal_collapsed_duplicate"))
+            self.assertEqual(counts.get("heal_ok"), 3)
             self.assertTrue((out / "arale_test_2.sft").is_file())
             self.assertTrue((out / "arale_test_2.cm-info.json").is_file())
-            self.assertFalse((out / "arale_test_2-v9.sft").exists())
-            self.assertFalse((out / "arale_test_2-v9-2.sft").exists())
+            self.assertTrue((out / "arale_test_2-v9.sft").exists())
+            self.assertTrue((out / "arale_test_2-v9-2.sft").exists())
             client.download.assert_not_called()
 
-    def test_orphan_collision_sidecar_is_purged_not_redownloaded(self) -> None:
+    def test_orphan_collision_with_unknown_identity_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
             (out / "arale_test_2.sft").write_bytes(b"weight-bytes-here")
@@ -91,7 +92,7 @@ class HealSftAndDuplicateTests(unittest.TestCase):
                 dry_run=False,
             )
             self.assertIsNone(counts.get("heal_redownloaded"))
-            self.assertFalse((out / "arale_test_2-v9.cm-info.json").exists())
+            self.assertTrue((out / "arale_test_2-v9.cm-info.json").exists())
             self.assertTrue((out / "arale_test_2.sft").is_file())
             client.download.assert_not_called()
 

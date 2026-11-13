@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import functools
 import os
 import threading
 import time
+import uuid
+from contextlib import ExitStack
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -24,7 +28,7 @@ from civitmatrix.download_one import (
 )
 from civitmatrix.heal_library import heal_library
 from civitmatrix.index_health import format_index_log_line, index_diagnostics
-from civitmatrix.indexer import load_local_index, load_local_model_max_versions
+from civitmatrix.indexer import load_local_index, load_local_install_identities, load_local_model_max_versions
 from civitmatrix.job_state import JobState
 from civitmatrix.listing_cache import (
     ListingCacheWriter,
@@ -35,7 +39,7 @@ from civitmatrix.listing_cache import (
 )
 from civitmatrix.logging_io import RunLogger, utc_now
 from civitmatrix.sm_sidecars import build_cm_info
-from civitmatrix.model_filters import model_passes_filters
+from civitmatrix.model_filters import is_all_filter, model_passes_filters
 from civitmatrix.partial_sweep import purge_stale_partials
 from civitmatrix.pause_control import PauseGate
 from civitmatrix.run_lock import RunLock, RunLockError
@@ -53,6 +57,34 @@ SM_REFRESH_HINT = (
 def _emit_sm_refresh_hint(job: JobState, logger: RunLogger) -> None:
     logger.log(SM_REFRESH_HINT)
     job.emit("sm_refresh_hint", message=SM_REFRESH_HINT)
+
+
+_admission: ContextVar[tuple[str, RunLock]] = ContextVar("writer_admission")
+
+
+def _admit_writer(fn):
+    """Own both library and shared control paths before changing job state."""
+    @functools.wraps(fn)
+    def admitted(*, out_dir, logger, **kwargs):
+        run_id = str(uuid.uuid4())
+        with ExitStack() as locks:
+            try:
+                output_lock = locks.enter_context(RunLock.acquire(out_dir, run_id))
+                logs_dir = logger.job_path.parent
+                if logs_dir.resolve() != out_dir.resolve():
+                    locks.enter_context(RunLock.acquire(logs_dir, run_id))
+            except RunLockError as exc:
+                logger.log(f"ERROR: {exc}")
+                return 3
+            token = _admission.set((run_id, output_lock))
+            try:
+                return fn(out_dir=out_dir, logger=logger, **kwargs)
+            finally:
+                _admission.reset(token)
+    return admitted
+
+
+@_admit_writer
 def run_batch(
     *,
     client: CivitClient,
@@ -73,7 +105,7 @@ def run_batch(
     use_listing_cache: bool = False,
     refresh_listing: bool = False,
     disk_floor_gib: float = 2.0,
-    keep_old_versions: bool = False,
+    keep_old_versions: bool = True,
     tag_include: list[str] | None = None,
     tag_exclude: list[str] | None = None,
     category: str = "",
@@ -90,6 +122,7 @@ def run_batch(
     selection_map: dict[int, list] | None = None,
     write_swarm: bool = False,
     update_only: bool = False,
+    allow_deletions: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -100,7 +133,8 @@ def run_batch(
 
     disk_floor_bytes = floor_bytes_from_gib(disk_floor_gib)
 
-    job = JobState(logger.job_path)
+    run_id, lock = _admission.get()
+    job = JobState(logger.job_path, run_id=run_id)
     job.set_meta(
         dryRun=bool(dry_run),
         baseModel=base_model,
@@ -133,23 +167,16 @@ def run_batch(
 
         return on_pause, on_resume
 
-    try:
-        lock = RunLock.acquire(out_dir, job.run_id)
-    except RunLockError as e:
-        job.emit("lock_denied", detail=str(e), **e.lock_info)
-        job.set_phase("error")
-        logger.log(f"ERROR: {e}")
-        return 3
-
     job.emit("lock_acquired", lockPath=str(lock.path), pid=os.getpid())
     job.set_meta(lockPath=str(lock.path))
 
     if keep_partials:
         job.emit("partial_sweep_skipped", reason="keep_partials")
         logger.log("Keeping all temps including preview downloads (--keep-partials)")
-    elif dry_run:
-        job.emit("partial_sweep_skipped", reason="dry_run")
-        logger.log("Dry-run: skipped stale temp purge")
+    elif dry_run or not allow_deletions:
+        reason = "dry_run" if dry_run else "deletion_not_authorized"
+        job.emit("partial_sweep_skipped", reason=reason)
+        logger.log(f"Skipped stale temp purge: {reason}")
     else:
         # Keep *.safetensors.partial for Range resume; purge preview junk only
         removed = purge_stale_partials(out_dir, keep_weight_partials=True)
@@ -163,8 +190,9 @@ def run_batch(
             )
 
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
+    local_install_identities = load_local_install_identities(out_dir)
     local_max_versions = (
-        load_local_model_max_versions(out_dir) if update_only else {}
+        load_local_model_max_versions(out_dir, by_base=True) if update_only else {}
     )
     if update_only:
         logger.log(
@@ -303,6 +331,8 @@ def run_batch(
                     write_swarm=write_swarm,
                     update_only=update_only,
                     local_max_versions=local_max_versions if update_only else None,
+                    allow_deletions=allow_deletions,
+                    local_install_identities=local_install_identities,
                 )
                 if last in {"cancelled", "disk_full"}:
                     return last
@@ -555,6 +585,8 @@ def _iter_models_for_run(
         "modelType": model_type,
         "sort": sort,
         "nsfw": bool(nsfw),
+        "username": (users[0].strip().lstrip("@").lower() or None) if len(users) == 1 else None,
+        "checkpointType": None if is_all_filter(checkpoint_type) else str(checkpoint_type).strip(),
     }
     key = make_cache_key(
         base_url=key_fields["baseUrl"],
@@ -562,6 +594,8 @@ def _iter_models_for_run(
         model_type=key_fields["modelType"],
         sort=key_fields["sort"],
         nsfw=key_fields["nsfw"],
+        username=key_fields["username"],
+        checkpoint_type=key_fields["checkpointType"],
     )
     use_cache = bool(use_listing_cache)
     refresh = bool(refresh_listing)
@@ -574,6 +608,8 @@ def _iter_models_for_run(
             model_type=key_fields["modelType"],
             sort=key_fields["sort"],
             nsfw=key_fields["nsfw"],
+            username=key_fields["username"],
+            checkpoint_type=key_fields["checkpointType"],
         )
         if reason == "ok" and meta is not None:
             _, jsonl = cache_paths(logs_dir, key)
@@ -611,7 +647,7 @@ def _iter_models_for_run(
         if writer is not None:
             writer.append_page(page=page, next_page=next_page, items=items)
 
-    username = users[0] if len(users) == 1 else None
+    username = key_fields["username"]
     for model in iter_filtered_models(
         client,
         base_model=base_model,
@@ -638,6 +674,7 @@ def _iter_models_for_run(
     listing_state["exhausted"] = True
 
 
+@_admit_writer
 def run_heal(
     *,
     client: CivitClient,
@@ -648,6 +685,7 @@ def run_heal(
     keep_partials: bool = False,
     refresh_sidecars: bool = False,
     write_swarm: bool = False,
+    allow_deletions: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -656,7 +694,8 @@ def run_heal(
     cancel.clear()
     pause.clear()
 
-    job = JobState(logger.job_path)
+    run_id, lock = _admission.get()
+    job = JobState(logger.job_path, run_id=run_id)
     job.set_meta(
         dryRun=bool(dry_run),
         outDir=str(out_dir),
@@ -680,23 +719,16 @@ def run_heal(
 
         return on_pause, on_resume
 
-    try:
-        lock = RunLock.acquire(out_dir, job.run_id)
-    except RunLockError as e:
-        job.emit("lock_denied", detail=str(e), **e.lock_info)
-        job.set_phase("error")
-        logger.log(f"ERROR: {e}")
-        return 3
-
     job.emit("lock_acquired", lockPath=str(lock.path), pid=os.getpid())
     job.set_meta(lockPath=str(lock.path))
 
     try:
         if keep_partials:
             job.emit("partial_sweep_skipped", reason="keep_partials")
-        elif dry_run:
-            job.emit("partial_sweep_skipped", reason="dry_run")
-            logger.log("Dry-run: skipped stale temp purge")
+        elif dry_run or not allow_deletions:
+            reason = "dry_run" if dry_run else "deletion_not_authorized"
+            job.emit("partial_sweep_skipped", reason=reason)
+            logger.log(f"Skipped stale temp purge: {reason}")
         else:
             removed = purge_stale_partials(out_dir, keep_weight_partials=True)
             job.set_count("partialsPurged", len(removed))
@@ -739,6 +771,7 @@ def run_heal(
             write_swarm=write_swarm,
             cancel_check=_cancel,
             pause_wait=_pause,
+            allow_deletions=allow_deletions,
         )
         if counts.get("cancelled"):
             job.set_phase("cancelled")

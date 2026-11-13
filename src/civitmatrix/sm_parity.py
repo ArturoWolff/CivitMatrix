@@ -230,11 +230,14 @@ def import_sm_manifest(
     manifest_path: Path,
     *,
     recursive: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     """
     Walk recursive cm-info and append rows to ``manifest.jsonl``.
 
     Skips duplicates by ``versionId`` already present in the manifest.
+    Writing callers must hold RunLock for both library and manifest directory.
+    A dry run counts proposed appends without creating files or directories.
     """
     existing = _existing_manifest_version_ids(manifest_path)
     appended = 0
@@ -242,7 +245,8 @@ def import_sm_manifest(
     skipped_incomplete = 0
     scanned = 0
 
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     for info_path in iter_cm_info_paths(out_dir, recursive=recursive):
         scanned += 1
@@ -291,8 +295,9 @@ def import_sm_manifest(
             "sortHints": sort_hints_from_tags(tags if isinstance(tags, list) else []),
             "source": "sm_library",
         }
-        with manifest_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if not dry_run:
+            with manifest_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         existing.add(version_id)
         appended += 1
 

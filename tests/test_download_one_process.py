@@ -66,7 +66,7 @@ class ProcessOneSafetyTests(unittest.TestCase):
             self.assertEqual(local_blake3, set())
             client.download.assert_not_called()
 
-    def test_sidecar_write_failure_keeps_skip_reservation(self) -> None:
+    def test_sidecar_write_failure_keeps_weight_without_marking_install_complete(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             out = root / "out"
@@ -101,9 +101,9 @@ class ProcessOneSafetyTests(unittest.TestCase):
                 )
             self.assertEqual(status, "error")
             self.assertTrue((out / "foo.safetensors").is_file())
-            self.assertIn(9, local_versions)
+            self.assertNotIn(9, local_versions)
             self.assertIn("foo", local_stems)
-            self.assertIn("AA", local_blake3)
+            self.assertNotIn("AA", local_blake3)
 
     def test_zip_only_version_is_no_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:

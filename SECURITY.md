@@ -30,7 +30,11 @@ On a shared machine, prefer `./run.sh --cli …` and do not leave the UI running
 
 ## Downloads
 
-Files are written under the configured output directory (`LORA_DIR` / `--out` / Directories paths). Partial downloads use a `.partial` suffix. Latest-only mode may delete older local versions of the same `ModelId` under that folder.
+Files are written under the configured output directory (`LORA_DIR` / `--out` / Directories paths). Partial downloads use a `.partial` suffix. HTTP resume verifies byte ranges and response/final lengths before committing a destination.
+
+Historical versions and duplicate bundles are preserved by default. Cleanup requires explicit `--allow-deletions`; optional older-version pruning also requires `--prune-old-versions`. Distinct versions are never considered duplicates. Duplicate deletion verifies actual payload hashes plus author/model/version/file/base/format identity. Unknown or conflicting provenance is preserved. Heal does not replace an existing weight without explicit authorization and never substitutes an unrelated release file for a recorded file ID.
+
+Kernel-held leases coordinate identical, parent/child and directory-alias scopes among same-user CivitMatrix writers. A private per-user registry coordinates overlapping scopes; output and shared-log directory locks protect job admission. Lock JSON is status information, not ownership proof, and lock files remain after release. Do not remove a lock file while a writer owns it. All writers must use the same registry location (`CIVITMATRIX_LOCK_REGISTRY` can override it for isolated testing).
 
 ## Reporting issues
 

@@ -104,15 +104,13 @@ def apply_preset_defaults(
     *,
     base: dict[str, Any],
 ) -> dict[str, Any]:
-    """Merge preset under base (base wins for keys already present and non-empty)."""
+    """Merge preset defaults under explicit base values, including clearing values."""
     if not preset:
         return dict(base)
     merged = dict(base)
     for key in PRESET_KEYS:
         if key not in preset:
             continue
-        cur = merged.get(key)
-        empty = cur is None or cur == "" or cur == [] or cur == "All"
-        if empty or key not in merged:
+        if key not in merged:
             merged[key] = preset[key]
     return merged

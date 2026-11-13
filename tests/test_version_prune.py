@@ -7,6 +7,8 @@ import threading
 import unittest
 from pathlib import Path
 
+from civitmatrix.hash_blake3 import file_blake3_hex
+
 from civitmatrix.version_prune import (
     collapse_stem_collisions,
     collision_base_name,
@@ -24,13 +26,16 @@ def _write_info(
     version_id: int,
     blake3: str | None = None,
 ) -> None:
-    (dir / f"{stem}.safetensors").write_bytes(b"weight")
+    (dir / f"{stem}.safetensors").write_bytes((blake3 or "weight").encode())
     (dir / f"{stem}.preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    payload: dict = {"VersionId": version_id}
+    payload: dict = {"VersionId": version_id, "BaseModel": "Anima",
+                     "AuthorUsername": "creator", "ModelType": "LORA",
+                     "RemoteFileId": 22, "RemoteFileName": "file.safetensors",
+                     "FileMetadata": {"format": "SafeTensor"}}
     if model_id is not None:
         payload["ModelId"] = model_id
     if blake3:
-        payload["Hashes"] = {"BLAKE3": blake3}
+        payload["Hashes"] = {"BLAKE3": file_blake3_hex(dir / f"{stem}.safetensors")}
     (dir / f"{stem}.cm-info.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -46,7 +51,7 @@ class VersionPruneTests(unittest.TestCase):
             stems = {c["stem"] for c in cands}
             self.assertEqual(stems, {"old"})
             self.assertEqual(cands[0]["versionId"], 100)
-            self.assertEqual(cands[0]["blake3"], "AAA")
+            self.assertEqual(cands[0]["blake3"], file_blake3_hex(d / "old.safetensors"))
 
     def test_delete_stem_bundle_removes_weight_info_preview(self):
         with tempfile.TemporaryDirectory() as td:
@@ -65,7 +70,9 @@ class VersionPruneTests(unittest.TestCase):
             d = Path(td)
             _write_info(d, "old", model_id=1, version_id=100, blake3="AAA")
             _write_info(d, "new", model_id=1, version_id=200, blake3="BBB")
-            local_blake3 = {"AAA", "BBB"}
+            old_hash = file_blake3_hex(d / "old.safetensors")
+            new_hash = file_blake3_hex(d / "new.safetensors")
+            local_blake3 = {old_hash, new_hash}
             local_versions = {100, 200}
             local_stems = {"old", "new"}
             lock = threading.Lock()
@@ -77,9 +84,10 @@ class VersionPruneTests(unittest.TestCase):
                 local_versions=local_versions,
                 local_stems=local_stems,
                 index_lock=lock,
+                allow_delete=True,
             )
             self.assertEqual([p["stem"] for p in pruned], ["old"])
-            self.assertEqual(local_blake3, {"BBB"})
+            self.assertEqual(local_blake3, {new_hash})
             self.assertEqual(local_versions, {200})
             self.assertEqual(local_stems, {"new"})
             self.assertTrue((d / "new.safetensors").exists())
@@ -107,7 +115,8 @@ class VersionPruneTests(unittest.TestCase):
             _write_info(
                 d, "arale_test_2-v9-2", model_id=1, version_id=9, blake3="AAA"
             )
-            local_blake3 = {"AAA"}
+            expected_hash = file_blake3_hex(d / "arale_test_2.safetensors")
+            local_blake3 = {expected_hash}
             local_versions = {9}
             local_stems = {"arale_test_2", "arale_test_2-v9", "arale_test_2-v9-2"}
             removed = collapse_stem_collisions(
@@ -118,6 +127,7 @@ class VersionPruneTests(unittest.TestCase):
                 local_versions=local_versions,
                 local_stems=local_stems,
                 index_lock=threading.Lock(),
+                allow_delete=True,
             )
             kept = {p["stem"] for p in removed}
             self.assertEqual(kept, {"arale_test_2-v9", "arale_test_2-v9-2"})
@@ -129,7 +139,7 @@ class VersionPruneTests(unittest.TestCase):
             self.assertIn("arale_test_2", local_stems)
             self.assertNotIn("arale_test_2-v9", local_stems)
             self.assertEqual(local_versions, {9})
-            self.assertEqual(local_blake3, {"AAA"})
+            self.assertEqual(local_blake3, {expected_hash})
 
     def test_collapse_does_not_remove_distinct_files_same_version(self):
         with tempfile.TemporaryDirectory() as td:
@@ -144,6 +154,7 @@ class VersionPruneTests(unittest.TestCase):
                 local_versions={9},
                 local_stems={"minimax_4step", "minimax_8step"},
                 index_lock=threading.Lock(),
+                allow_delete=True,
             )
             self.assertEqual(removed, [])
             self.assertTrue((d / "minimax_4step.safetensors").exists())
@@ -162,6 +173,7 @@ class VersionPruneTests(unittest.TestCase):
                 local_versions={2},
                 local_stems={"cool", "cool-v2"},
                 index_lock=threading.Lock(),
+                allow_delete=True,
             )
             self.assertEqual(removed, [])
             self.assertTrue((d / "cool.safetensors").exists())
@@ -180,6 +192,7 @@ class VersionPruneTests(unittest.TestCase):
                 local_versions={9},
                 local_stems={"foo", "foo-v9"},
                 index_lock=threading.Lock(),
+                allow_delete=True,
             )
             self.assertEqual(removed, [])
             self.assertTrue((d / "foo.safetensors").exists())

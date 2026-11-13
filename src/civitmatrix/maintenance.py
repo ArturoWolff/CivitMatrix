@@ -6,6 +6,7 @@ from collections import Counter
 from contextlib import ExitStack
 from copy import deepcopy
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -41,7 +42,7 @@ def read_object(path: Path) -> dict:
 
 
 def header_metadata(path: Path) -> dict:
-    """Bounded header read; validate tensor offsets without loading/unpickling weights."""
+    """Validate tensor shapes, dtypes and offsets without loading/unpickling weights."""
     if path.suffix.lower() not in {'.safetensors', '.sft'}:
         return {}
     size = path.stat().st_size
@@ -60,6 +61,14 @@ def header_metadata(path: Path) -> dict:
         raise ValueError('Invalid safetensors metadata')
     end = 0
     intervals = []
+    dtype_bits = {
+        'BOOL': 8, 'U8': 8, 'I8': 8, 'U16': 16, 'I16': 16,
+        'U32': 32, 'I32': 32, 'U64': 64, 'I64': 64,
+        'F16': 16, 'BF16': 16, 'F32': 32, 'F64': 64, 'C64': 64,
+        'F8_E4M3': 8, 'F8_E5M2': 8, 'F8_E8M0': 8,
+        'F8_E4M3FNUZ': 8, 'F8_E5M2FNUZ': 8,
+        'F4': 4, 'F6_E2M3': 6, 'F6_E3M2': 6,
+    }
     for tensor in header.values():
         if not isinstance(tensor, dict):
             raise ValueError('Invalid tensor entry')
@@ -68,6 +77,18 @@ def header_metadata(path: Path) -> dict:
                 or any(type(v) is not int for v in offsets)
                 or not 0 <= offsets[0] <= offsets[1] <= size - 8 - length):
             raise ValueError('Invalid tensor offsets or truncated weight')
+        shape = tensor.get('shape')
+        dtype = tensor.get('dtype')
+        if not isinstance(shape, list) or any(type(n) is not int or n < 0 for n in shape):
+            raise ValueError('Invalid tensor shape')
+        if not isinstance(dtype, str) or dtype not in dtype_bits:
+            raise ValueError('Unknown or missing tensor dtype')
+        bit_count = math.prod(shape) * dtype_bits[dtype]
+        if bit_count % 8:
+            raise ValueError('Subbyte tensor is not byte aligned')
+        expected = bit_count // 8
+        if offsets[1] - offsets[0] != expected:
+            raise ValueError('Tensor shape and dtype do not match byte length')
         intervals.append(offsets)
     for start, stop in sorted(intervals):
         if start != end:
@@ -83,7 +104,7 @@ def header_metadata(path: Path) -> dict:
 def walk_library(roots: list[Path], emit) -> list[Path]:
     """Follow directory aliases once, detect broken links and scan errors."""
     seen = set()
-    weights = set()
+    weights: dict[Path, Path] = {}
     for root in roots:
         if not root.is_dir():
             emit('error', root, detail='Missing library directory')
@@ -103,10 +124,16 @@ def walk_library(roots: list[Path], emit) -> list[Path]:
             for name in files:
                 path = real / name
                 if path.suffix.lower() in WEIGHTS and path.is_file():
-                    weights.add(path.resolve())
+                    target = path.resolve()
+                    current = weights.get(target)
+                    # Cache snapshot files may link to extensionless blobs. Pair
+                    # metadata beside the logical filename, not beside the blob.
+                    if current is None or (path.with_suffix('.cm-info.json').is_file()
+                                           and not current.with_suffix('.cm-info.json').is_file()):
+                        weights[target] = path
                 elif name.endswith('.partial'):
                     emit('partial_kept', path)
-    return sorted(weights)
+    return sorted(weights.values())
 
 
 def write_additions(path: Path, old: dict, new: dict, *, apply: bool, emit) -> None:

@@ -4,12 +4,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+from civitmatrix.indexer import iter_library_files
+
 
 def strip_swarm_thumbnails(out_dir: Path, *, dry_run: bool = False) -> dict[str, int]:
+    """Strip nested sidecars; callers must hold the library RunLock when writing."""
     counts = {"scanned": 0, "stripped": 0, "unchanged": 0, "errors": 0}
     if not out_dir.is_dir():
         return counts
-    for path in sorted(out_dir.glob("*.swarm.json")):
+    paths = (path for path in iter_library_files(out_dir, recursive=True)
+             if path.name.endswith(".swarm.json"))
+    for path in sorted(paths):
         counts["scanned"] += 1
         try:
             parsed: Any = json.loads(path.read_text(encoding="utf-8"))

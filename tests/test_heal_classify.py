@@ -134,6 +134,7 @@ class TestHealClassify(unittest.TestCase):
                 log=logs.append,
                 dry_run=False,
                 write_swarm=False,
+                allow_deletions=True,
                 existing_cm=cm,
             )
             self.assertEqual(status, "gone")
@@ -171,6 +172,7 @@ class TestHealClassify(unittest.TestCase):
                 build_cm_info=build_cm_info,
                 log=lambda _m: None,
                 dry_run=False,
+                allow_deletions=True,
                 existing_cm=None,
             )
             self.assertEqual(status, "gated")
@@ -213,6 +215,7 @@ class TestHealClassify(unittest.TestCase):
                 build_cm_info=build_cm_info,
                 log=lambda _m: None,
                 dry_run=False,
+                allow_deletions=True,
                 existing_cm={"ModelId": 2, "VersionId": 1, "Hashes": {"BLAKE3": "AAAA"}},
             )
             self.assertEqual(status, "failed")
@@ -253,6 +256,7 @@ class TestHealClassify(unittest.TestCase):
                 build_cm_info=build_cm_info,
                 log=lambda _m: None,
                 dry_run=False,
+                allow_deletions=True,
                 existing_cm=None,
             )
             self.assertEqual(status, "failed")
@@ -303,6 +307,7 @@ class TestHealClassify(unittest.TestCase):
                 build_cm_info=build_cm_info,
                 log=lambda _m: None,
                 dry_run=False,
+                allow_deletions=True,
                 existing_cm={
                     "ModelId": 1,
                     "VersionId": 9,
