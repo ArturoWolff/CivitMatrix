@@ -22,6 +22,10 @@ python -m civitmatrix --dry-run --limit 3
 - SM sidecar shape is a compatibility contract — change it carefully.
 - **Ship docs with features:** update `README.md`, `docs/GUIDE.md`, and `ROADMAP.md` in the same change (or immediately after) so GitHub stays current.
 
+## Code comments
+
+Follow [the AGENTS comment rule](AGENTS.md#code-comment-voice): useful explanations with regular playful senior-agent banter, crude adult humor and profanity in a positive collaborative voice. The rule is retroactive; improve already-completed source without changing behavior or unrelated work. Keep factual claims accurate and comments current.
+
 ## Code of conduct
 
 Be respectful. No harassment. This project may be used with mature-content APIs — keep discussions technical and legal.

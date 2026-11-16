@@ -129,6 +129,8 @@ def current_session_token(session_path: Path) -> str | None:
 
 
 def token_ok(handler: BaseHTTPRequestHandler, session_path: Path) -> bool:
+    # No session token means no authentication, even if the header is also empty.
+    # Localhost is an address, not a fucking permission slip.
     expected = current_session_token(session_path)
     if not expected:
         return False
@@ -376,6 +378,8 @@ def _spawn_run(
     argv: list[str], root: Path, *, before_spawn: Callable[[], None] | None = None
 ) -> dict[str, Any]:
     global _run_proc
+    # Keep admission and spawn in one critical section, including the callback.
+    # Locking only the check invites a two-process shitshow. Nice try, click goblin.
     with _run_lock:
         if _run_proc is not None and _run_proc.poll() is None:
             return {"ok": False, "error": "a run is already active", "pid": _run_proc.pid}
@@ -635,6 +639,8 @@ class Handler(BaseHTTPRequestHandler):
         fd, name = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=root)
         tmp = Path(name)
         try:
+            # Prepare the complete restricted replacement before swapping it in.
+            # Secrets deserve a changing room, not a half-written wardrobe malfunction.
             os.chmod(tmp, mode)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 stream.write("\n".join(out) + "\n")

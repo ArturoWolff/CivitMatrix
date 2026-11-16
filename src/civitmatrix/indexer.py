@@ -108,6 +108,8 @@ def iter_library_files(out_dir: Path, *, recursive: bool = False):
         try:
             stat = directory.stat()
             identity = (stat.st_dev, stat.st_ino)
+            # Deduplicate physical directories, not aliases; symlinks can loop.
+            # Symlink goblin: "One more lap?" Maintainer: fuck no.
             if identity in seen:
                 continue
             seen.add(identity)
@@ -189,6 +191,7 @@ def load_local_index(
         return blake3s, version_ids, stems
 
     # Pair by (parent dir, basename stem) so nested same-name files stay distinct.
+    # "Same filename, same model" is filesystem astrology. Keep the directory.
     weights: dict[tuple[Path, str], Path] = {}
     for wp in iter_weight_paths(out_dir, recursive=recursive):
         stem = wp.stem
@@ -212,6 +215,8 @@ def load_local_index(
             continue
         if not isinstance(data, dict):
             continue
+        # A nonempty payload still needs these sidecar fields to count as installed.
+        # Installed badges are not participation trophies for lonely JSON files.
         h = (data.get("Hashes") or {}).get("BLAKE3")
         vid = data.get("VersionId")
         if not h or vid is None:

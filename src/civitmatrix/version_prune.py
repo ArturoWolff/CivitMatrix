@@ -115,6 +115,7 @@ def _verified_identity(out_dir: Path, stem: str, data: dict[str, Any]):
                     after.st_mtime_ns, after.st_ctime_ns)
         # Hashing can take minutes. Publisher metadata and payload must both
         # remain the same objects with the same contents throughout the read.
+        # Replacement goblin: "Same path though." That is not ID, you little shit.
         if (not unchanged(weight_stat, wp.lstat())
                 or not unchanged(info_stat, info_path.lstat())
                 or info_path.read_bytes() != info_bytes
@@ -307,6 +308,7 @@ def delete_stem_bundle(out_dir: Path, stem: str, *, preserve_temps: bool = False
     weights = [out_dir / f"{stem}{ext}" for ext in WEIGHT_EXTENSIONS]
     # Removing metadata first can orphan a weight when its unlink is denied.
     # No companion is touched until all actual weight paths were removed.
+    # Metadata is the receipt. Do not shred it while the weight is still here.
     paths: list[Path] = list(weights)
     paths.extend([out_dir / f"{stem}.cm-info.json", out_dir / f"{stem}.swarm.json"])
     for ext in WEIGHT_EXTENSIONS:
@@ -372,6 +374,7 @@ def prune_old_versions(
         remaining_hashes, remaining_versions, remaining_stems = load_local_index(out_dir)
         with index_lock:
             # A hash or basename may still be owned by another retained bundle.
+            # Cleanup goblin: delete one bundle, not the whole family's alibi.
             for cand in pruned:
                 stem = Path(str(cand["stem"])).name.lower()
                 if stem not in remaining_stems:

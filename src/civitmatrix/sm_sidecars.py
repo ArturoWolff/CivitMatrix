@@ -150,6 +150,8 @@ def preserve_cached_publisher(
     author = candidate.get("AuthorUsername")
     if author is not None and (not isinstance(author, str) or author.strip()):
         return candidate
+    # Reuse cached credit only when every install-identity field agrees.
+    # Metadata detective: "same vibe" is not a fucking primary key.
     matches: dict[str, str] = {}
     for source in sources:
         identity = cm_install_identity(source)
@@ -158,6 +160,7 @@ def preserve_cached_publisher(
         probe = {**candidate, "AuthorUsername": source["AuthorUsername"]}
         if cm_install_identity(probe) == identity:
             matches[identity[2]] = source["AuthorUsername"]
+    # Ambiguous credit stays unresolved; we are not playing author roulette.
     if len(matches) != 1:
         return candidate
     return {**candidate, "AuthorUsername": next(iter(matches.values()))}

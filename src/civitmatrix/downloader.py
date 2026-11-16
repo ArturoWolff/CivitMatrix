@@ -68,6 +68,8 @@ def _admit_writer(fn):
     @functools.wraps(fn)
     def admitted(*, out_dir, logger, **kwargs):
         run_id = str(uuid.uuid4())
+        # Different libraries can share control files, so lock both roots.
+        # Future agent: one lock? Cute. Two jobs can still shit in the same mailbox.
         with ExitStack() as locks:
             try:
                 output_lock = locks.enter_context(RunLock.acquire(out_dir, run_id))
@@ -81,6 +83,8 @@ def _admit_writer(fn):
             try:
                 return fn(out_dir=out_dir, logger=logger, **kwargs)
             finally:
+                # Restore the caller's admission context even when the job raises.
+                # ContextVar is not a souvenir; put the damn thing back.
                 _admission.reset(token)
     return admitted
 
