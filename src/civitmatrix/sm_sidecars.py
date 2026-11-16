@@ -141,6 +141,28 @@ def swarm_architecture_for(
     return base_id
 
 
+def preserve_cached_publisher(
+    candidate: dict[str, Any], sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Recover only an omitted author, using every existing install-identity slot."""
+    from civitmatrix.indexer import cm_install_identity
+
+    author = candidate.get("AuthorUsername")
+    if author is not None and (not isinstance(author, str) or author.strip()):
+        return candidate
+    matches: dict[str, str] = {}
+    for source in sources:
+        identity = cm_install_identity(source)
+        if identity is None:
+            continue
+        probe = {**candidate, "AuthorUsername": source["AuthorUsername"]}
+        if cm_install_identity(probe) == identity:
+            matches[identity[2]] = source["AuthorUsername"]
+    if len(matches) != 1:
+        return candidate
+    return {**candidate, "AuthorUsername": next(iter(matches.values()))}
+
+
 def build_cm_info(
     model: dict[str, Any],
     version: dict[str, Any],

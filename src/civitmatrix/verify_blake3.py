@@ -42,6 +42,44 @@ def remote_blake3_from_file_info(file_info: dict[str, Any] | None) -> str | None
     return str(h) if h else None
 
 
+def file_identity_matches_hash_lookup(version_payload, identity, actual_hash) -> bool:
+    """By-hash version membership alone never proves which file was served."""
+    from civitmatrix.indexer import cm_install_identity
+
+    if identity is None or not isinstance(version_payload, dict):
+        return False
+    try:
+        if (int(version_payload.get('id') or 0) != identity[1]
+                or int(version_payload.get('modelId') or 0) != identity[0]
+                or version_payload.get('baseModel') != identity[3]):
+            return False
+        publisher = version_payload.get('model') or {}
+        creator = (publisher.get('creator') or {}).get('username')
+        if creator and str(creator).strip().casefold() != identity[2]:
+            return False
+        if publisher.get('type') and publisher['type'] != identity[4]:
+            return False
+        for remote in version_payload.get('files') or []:
+            metadata = remote.get('metadata') or {}
+            candidate = cm_install_identity({
+                'ModelId': version_payload['modelId'], 'VersionId': version_payload['id'],
+                'AuthorUsername': identity[2], 'BaseModel': version_payload['baseModel'],
+                'ModelType': identity[4], 'RemoteFileId': remote.get('id'),
+                'RemoteFileName': remote.get('name'),
+                'FileMetadata': {'format': metadata.get('format'),
+                                 'fp': metadata.get('fp'), 'size': metadata.get('size')}})
+            if candidate == identity:
+                # A multi-file version response does not identify which variant
+                # matched the lookup unless this file explicitly carries the hash.
+                if len(version_payload.get('files') or []) == 1:
+                    return True
+                digest = (remote.get('hashes') or {}).get('BLAKE3')
+                return bool(digest and str(digest).upper() == str(actual_hash).upper())
+    except (TypeError, ValueError, KeyError):
+        return False
+    return False
+
+
 def version_matches_local_hash(
     version_payload: dict[str, Any] | None,
     expected_version_id: int,

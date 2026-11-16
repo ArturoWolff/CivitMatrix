@@ -27,6 +27,7 @@ from civitmatrix.download_one import (
     process_one,
 )
 from civitmatrix.heal_library import heal_library
+from civitmatrix.library_cleanup import cleanup_working_library
 from civitmatrix.index_health import format_index_log_line, index_diagnostics
 from civitmatrix.indexer import load_local_index, load_local_install_identities, load_local_model_max_versions
 from civitmatrix.job_state import JobState
@@ -105,7 +106,7 @@ def run_batch(
     use_listing_cache: bool = False,
     refresh_listing: bool = False,
     disk_floor_gib: float = 2.0,
-    keep_old_versions: bool = True,
+    keep_old_versions: bool = False,
     tag_include: list[str] | None = None,
     tag_exclude: list[str] | None = None,
     category: str = "",
@@ -123,6 +124,7 @@ def run_batch(
     write_swarm: bool = False,
     update_only: bool = False,
     allow_deletions: bool = False,
+    library_cleanup: bool = True,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -150,6 +152,8 @@ def run_batch(
         diskFloorGib=float(disk_floor_gib),
         writeSwarm=bool(write_swarm),
         updateOnly=bool(update_only),
+        libraryCleanup=bool(library_cleanup),
+        keepOldVersions=bool(keep_old_versions),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -189,6 +193,15 @@ def run_batch(
                 "(weight *.safetensors.partial kept for resume)"
             )
 
+    if library_cleanup and not skip_verify:
+        for candidate in cleanup_working_library(
+            out_dir, keep_old_versions=keep_old_versions, dry_run=dry_run,
+            log=logger.log, cancel_check=cancel.is_requested,
+        ):
+            job.emit("library_cleanup", **candidate)
+            if candidate["deleted"]:
+                job.bump("deduplicated" if candidate["kind"] == "duplicate" else "pruned")
+    # Build skip state after cleanup, never from paths removed earlier in admission.
     local_blake3, local_versions, local_stems = load_local_index(out_dir)
     local_install_identities = load_local_install_identities(out_dir)
     local_max_versions = (
@@ -332,6 +345,7 @@ def run_batch(
                     update_only=update_only,
                     local_max_versions=local_max_versions if update_only else None,
                     allow_deletions=allow_deletions,
+                    library_cleanup=library_cleanup,
                     local_install_identities=local_install_identities,
                 )
                 if last in {"cancelled", "disk_full"}:
@@ -686,6 +700,8 @@ def run_heal(
     refresh_sidecars: bool = False,
     write_swarm: bool = False,
     allow_deletions: bool = False,
+    library_cleanup: bool = True,
+    keep_old_versions: bool = False,
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = logger.job_path.parent
@@ -702,6 +718,8 @@ def run_heal(
         mode="heal",
         refreshSidecars=bool(refresh_sidecars),
         writeSwarm=bool(write_swarm),
+        libraryCleanup=bool(library_cleanup),
+        keepOldVersions=bool(keep_old_versions),
     )
     cancel.install_sigint(lambda: job.run_id)
 
@@ -772,6 +790,8 @@ def run_heal(
             cancel_check=_cancel,
             pause_wait=_pause,
             allow_deletions=allow_deletions,
+            library_cleanup=library_cleanup,
+            keep_old_versions=keep_old_versions,
         )
         if counts.get("cancelled"):
             job.set_phase("cancelled")

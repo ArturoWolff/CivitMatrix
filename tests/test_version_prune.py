@@ -28,7 +28,7 @@ def _write_info(
 ) -> None:
     (dir / f"{stem}.safetensors").write_bytes((blake3 or "weight").encode())
     (dir / f"{stem}.preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    payload: dict = {"VersionId": version_id, "BaseModel": "Anima",
+    payload: dict = {"VersionId": version_id, "VersionName": f"v{version_id}", "BaseModel": "Anima",
                      "AuthorUsername": "creator", "ModelType": "LORA",
                      "RemoteFileId": 22, "RemoteFileName": "file.safetensors",
                      "FileMetadata": {"format": "SafeTensor"}}

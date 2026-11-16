@@ -31,7 +31,7 @@ Deferred post-1.0: Translations.
 - [x] Cooperative `--cancel` / Ctrl+C (exit 4)
 - [x] Cooperative `--pause` / `--resume`
 - [x] `--status` / `--status --json` with stable exit codes
-- [x] On start: purge stale `*.partial` / preview download temps (`--keep-partials` to skip)
+- [x] Separately authorized startup temp cleanup (`--allow-deletions`); preserve resumable weight partials
 - [x] `--heal` library consolidate (BLAKE3 by-hash sidecars, orphan purge, bad-weight repair; `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stop redownload thrash; index `.sft`; collapse same-hash unique-stem duplicates; heal never replaces a live weight with unverified bytes; `--dry-run` does not purge temps)
 - [x] Richer local index log (missingBlake3 / orphanInfo / …)
 - [x] HTTP Range resume for interrupted weight downloads
@@ -80,7 +80,7 @@ Deferred post-1.0: Translations.
 ## Crash recovery (next)
 
 - [x] HTTP **Range** resume for `*.safetensors.partial` (`download_resume` / `--no-resume-partials`)  
-- [x] Start sweep keeps weight partials; purges preview temps (`partial_purged`)  
+- [x] Start sweep keeps weight partials; preview/temp purging requires `--allow-deletions` (`partial_purged`)
 - [x] Post-download BLAKE3 verify against CivitAI file hash  
 - [x] Safe restart mid-catalog without re-downloading verified files (stream + skip/index)
 
@@ -94,6 +94,14 @@ From [Maintenance Report - August 2026](docs/superpowers/reports/Maintenance-Rep
 - [x] Listing pagination: `nextCursor` fallback + HTTP 429 / `Retry-After` backoff  
 - [x] Docs: opt-in `--write-swarm`; FILTERS types/sort notes  
 - [x] Swarm `modelspec.architecture` write + `--fix-swarm-architecture` backfill  
+
+## Verified working-library maintenance
+
+- [x] Default verified clone removal and proven same-item predecessor replacement; explicit archiving via `--keep-old-versions` and cleanup opt-out via `--no-library-cleanup`
+- [x] Preserve collection characters, alternate variants, personal weights and partial downloads; no supersession from version-ID order alone
+- [x] Identity-bound stale-hash receipts, actual-payload verification, remote validators and a finite 24-hour refresh when validators are unavailable
+- [x] Preserve a cached publisher and accepted-payload receipt only across a verified matching selected-file identity; keep receipt timestamps and reject conflicting publishers or changed advertised hashes
+- [x] Reuse an exact selected upload with missing publisher name only after fresh SHA256/BLAKE3 and supported source-variant checks; no invented publisher, anonymous receipt or pruning authority
 
 ## QoL forever
 

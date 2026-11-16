@@ -22,7 +22,7 @@ def pair(d, stem, vid=9, payload=b'healthy', **overrides):
     wp = d / f'{stem}.safetensors'
     wp.parent.mkdir(parents=True, exist_ok=True)
     wp.write_bytes(payload)
-    cm = {'ModelId': 1, 'VersionId': vid, 'BaseModel': 'Anima',
+    cm = {'ModelId': 1, 'VersionId': vid, 'VersionName': f'v{vid}', 'BaseModel': 'Anima',
           'AuthorUsername': 'creator', 'ModelType': 'LORA',
           'RemoteFileId': 22, 'RemoteFileName': 'file.safetensors',
           'FileMetadata': {'format': 'SafeTensor', 'fp': 'fp16', 'size': 'full'},
@@ -42,7 +42,7 @@ def client():
 def incoming(vid, digest):
     return {'id': 1, 'name': 'model', 'type': 'LORA', 'tags': [],
             'creator': {'username': 'creator'}, 'modelVersions': [
-        {'id': vid, 'baseModel': 'Anima', 'images': [], 'files': [
+        {'id': vid, 'name': f'v{vid}', 'baseModel': 'Anima', 'images': [], 'files': [
             {'id': 22, 'name': 'incoming.safetensors', 'primary': True,
              'downloadUrl': 'https://example.invalid/file/22',
              'hashes': {'BLAKE3': digest}, 'metadata': {'format': 'SafeTensor'}}]}]}
@@ -99,7 +99,7 @@ class InstallSafetyTests(unittest.TestCase):
                 self.assertEqual(process(c, m, d, load_local_index(d)), 'ok')
                 self.assertEqual(len(list(d.glob('*.safetensors'))), 2)
 
-    def test_normal_download_preserves_historical_versions_by_default(self):
+    def test_normal_download_preserves_unproven_distinct_file_variants(self):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             pair(d, 'old', 100)

@@ -185,7 +185,7 @@ Downloads write to `*{ext}.partial` (e.g. `.safetensors.partial` / `.gguf.partia
 ./run.sh --cli --keep-partials      # also keep preview download temps on start
 ```
 
-On start of a **real** run (not `--dry-run`), preview `*.preview.download*` temps and non-weight `*.partial` junk (including leftover `*.heal-new.partial`) are purged recursively (`partial_purged`); weight `*.safetensors.partial` / `.gguf.partial` / `.sft.partial` are left alone for resume. `--dry-run` does not delete temps.
+With `--allow-deletions`, a **real** run (not `--dry-run`) can purge preview `*.preview.download*` temps and non-weight `*.partial` junk (including leftover `*.heal-new.partial`) recursively (`partial_purged`); weight `*.safetensors.partial` / `.gguf.partial` / `.sft.partial` are left alone for resume. Without that separate authorization, startup preserves temps. Normal duplicate/revision cleanup also preserves partial and staging files. `--dry-run` does not delete temps.
 
 ## Listing cache (opt-in)
 
@@ -218,31 +218,64 @@ After each weight download (including Range resume), CivitMatrix hashes the file
 | Result | What happens |
 |--------|----------------|
 | Match | `verify_ok` → write sidecars as usual |
-| Mismatch | delete weight; `verify_fail` (retryable); no sidecar |
+| Unresolved mismatch after retry | delete the newly fetched weight; `verify_fail` (retryable); no new sidecar |
 | No remote hash | `verify_skipped` (`no_remote_hash`); file kept |
 | `--skip-verify` | `verify_skipped` (`flag`); file kept |
-| Stale API BLAKE3 but `by-hash(local)` matches version | `verify_ok_stale_meta`; file kept |
+| Stale API BLAKE3 but `by-hash(local)` establishes the complete selected file identity | `verify_ok_stale_meta`; file kept with a bound acceptance receipt |
 
 ```bash
 ./run.sh --cli                # verify on (default)
 ./run.sh --cli --skip-verify        # opt out
 ```
 
-## Historical versions and authorized cleanup
+Stale-API acceptance binds the publisher, model/version/file, architecture and
+file variant to both advertised and actual hashes. Reusing it rehashes the
+selected local payload; a version-ID-only lookup is insufficient. An identical
+fresh download can be discarded only in favor of an existing verified payload
+with the **same actual hash**, never merely a compatible acceptance receipt.
 
-CivitMatrix preserves historical versions by default. Different releases, authors,
-base models and file variants remain distinct even when their payloads match.
-Neither an installed-file skip nor a pending worker reservation authorizes pruning.
+When available, a strong remote ETag and content length detect changed payloads.
+Without a usable remote validator, stale-API acceptance expires after **24 hours**
+and requires a fresh verified download; old timestamp-less receipts refresh once.
+A silent remote change with unchanged advertised metadata cannot be detected
+immediately without such a validator. Ordinary advertised-hash matches retain
+their fast skip path. `--skip-verify` disables automatic model cleanup, including
+the startup pass.
 
-Optional old-version pruning requires both `--prune-old-versions` and
-`--allow-deletions`. Only genuinely older releases in a verified surviving file's
-publisher/base scope qualify. This operation is separate from duplicate cleanup:
-v1 and v2 are not duplicates. Review and authorize any cleanup before running it.
+If the current selected API record has no publisher name, `skip_source` can reuse
+an existing exact upload without fabricating an author. It requires matching
+Civitai model/version/file IDs, base/type, supported format/precision/size metadata
+and both freshly computed SHA256 and BLAKE3 matching the current selected file.
+Missing/null optional precision and size labels remain unspecified and must match;
+they are never guessed. The API's literal `isRequired: false` endpoint default is
+not a weight variant.
+Unknown variant fields, incompatible or malformed file types, and conflicting
+publisher evidence reject this fallback. Files and sidecars must remain stable,
+regular, single-link files. This skip performs no cleanup and creates no
+anonymous acceptance receipt; generic deletion rules still require a complete
+publisher identity.
 
-Duplicate cleanup requires complete matching author/model/version/file identity
-and computed BLAKE3 equality. Missing identities, conflicting records, ambiguous
-formats and symlink files are preserved. `--keep-old-versions` remains supported
-and is the default. The UI does not enable deletion authorization.
+## Working-library defaults and optional archiving
+
+CivitMatrix defaults to a non-archival collection. It removes verified same-release
+clones and proven superseded revisions after verifying a complete surviving copy.
+Distinct versions are not duplicates: replacing v1 with v2 additionally requires
+same-item revision evidence in the same publisher/base/type/file-variant scope.
+A larger version ID alone is insufficient; collection pages can hold different
+characters. Ambiguous branches, alternate variants and unknown provenance stay.
+Shared triggers do not override different filename/item branches. Bare numeric
+suffixes are not assumed to be bookkeeping unless they match the recorded remote
+file or version ID; explicit version/epoch/step markers can establish lineage.
+Failed, pending or unverified downloads never authorize cleanup.
+
+`--keep-old-versions` explicitly archives older releases while still allowing
+verified clone removal. `--no-library-cleanup` disables both automatic cleanup
+operations. `--prune-old-versions` remains a compatibility alias for the default
+non-archival policy. The UI uses these same defaults and retains explicit choices
+in immutable job manifests, including retries.
+
+Orphan/temp deletion and replacement of an existing damaged weight remain
+separate operations requiring `--allow-deletions`. `--dry-run` never deletes.
 
 ## Update-only + SM library tools
 
@@ -253,7 +286,7 @@ Keep an existing folder current without downloading brand-new models:
 ./run.sh --cli --update-only --dry-run --limit 100
 ```
 
-Skips `skip_not_installed` / `skip_uptodate`; downloads only when the remote picked version is newer than the maximum installed `VersionId` for that `ModelId` **and base model**. Historical versions remain installed unless cleanup is explicitly authorized.
+Skips `skip_not_installed` / `skip_uptodate`; downloads only when the remote picked version is newer than the maximum installed `VersionId` for that `ModelId` **and base model**. Proven superseded same-item revisions are removed after survivor verification unless archiving is explicitly enabled.
 
 After a successful batch or heal, CivitMatrix logs an SM refresh reminder and emits `sm_refresh_hint`.
 
@@ -351,7 +384,7 @@ What it does:
 5. **Hash mismatch** (recorded or remote BLAKE3 ≠ file): existing weights are preserved unless replacement is explicitly authorized. Authorized replacements stage and verify the exact recorded file; they never replace it with unverified bytes or an unrelated primary variant. `remoteUnavailable` / `hashMismatchKept` / `hashUnresolved` stems are left alone.
 6. Existing empty files are preserved without deletion authorization. Authorized repair keeps the sidecar until a verified re-download succeeds; supported weight formats are `.safetensors` / `.gguf` / `.sft` (never jpeg/zip fallbacks).
 7. Orphan sidecars: re-download the exact recorded file when verifiable, otherwise report. Deleting an orphan requires both `--purge-orphans` and `--allow-deletions`.
-8. Unique-stem duplicates (`foo`, `foo-v123`, `foo-v123-2`) are proposed only when their actual bytes and complete publisher/file identity match. Deletion additionally requires `--allow-deletions`; distinct versions/authors or unknown identity are preserved.
+8. Verified clones, including renamed copies, are removed by default only when actual bytes and complete publisher/file identity match. Proven superseded same-item revisions are separate from duplicate cleanup. Use `--keep-old-versions` to archive revisions or `--no-library-cleanup` to disable both; unknown identity and distinct collection items stay.
 9. A by-hash API response must contain a file with the exact local BLAKE3. If it only returns an associated version (for example a checkpoint associated with a VAE), heal keeps the weight and reports it unresolved; it never substitutes that version's primary file.
 10. Local/private weights whose by-hash lookup **404s** get `CivitMatrix.hashUnresolved` so later heals do not re-query forever. Transport errors (429/timeouts) are not persisted; the next heal retries. `--refresh-sidecars` also retries `hashUnresolved`
 

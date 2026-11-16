@@ -295,10 +295,11 @@ class CliFilterPrecedenceSafetyTests(unittest.TestCase):
             self.assertEqual(actual['users'], []); self.assertEqual(actual['category'], 'All')
             self.assertIsNone(actual['max_nsfw_level'])
 
-    def test_historical_versions_default_to_preserved_and_cleanup_requires_opt_in(self):
+    def test_working_library_defaults_to_latest_with_separate_broad_deletion_permission(self):
         with tempfile.TemporaryDirectory() as td:
             default = self.capture(Path(td), [])
-            self.assertTrue(default['keep_old_versions'])
+            self.assertFalse(default['keep_old_versions'])
+            self.assertTrue(default['library_cleanup'])
             self.assertFalse(default['allow_deletions'])
             requested = self.capture(Path(td), ['--prune-old-versions', '--allow-deletions'])
             self.assertFalse(requested['keep_old_versions']); self.assertTrue(requested['allow_deletions'])

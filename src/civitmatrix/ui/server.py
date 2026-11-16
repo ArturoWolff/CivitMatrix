@@ -681,6 +681,8 @@ class Handler(BaseHTTPRequestHandler):
                 "outDir": str(out_dir),
                 "selection": selection,
                 "downloadAll": download_all,
+                "libraryCleanup": bool(body.get("libraryCleanup", True)),
+                "keepOldVersions": bool(body.get("keepOldVersions", False)),
             }
             p["logs"].mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(prefix="ui-job-", suffix=".json", dir=p["logs"])

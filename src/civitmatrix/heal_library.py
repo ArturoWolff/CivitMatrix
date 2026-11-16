@@ -26,10 +26,41 @@ from civitmatrix.preview_media import (
     pick_preview_url,
 )
 from civitmatrix.verify_blake3 import remote_blake3_from_file_info, verify_weight_blake3
-from civitmatrix.version_prune import collapse_stem_collisions
+from civitmatrix.library_cleanup import cleanup_working_library
 
 LogFn = Callable[[str], None]
 BuildCmFn = Callable[..., dict[str, Any]]
+
+
+def _preserve_accepted_payload(
+    out_dir: Path, stem: str, payload: dict[str, Any],
+    file_info: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Carry a stale-API receipt only across a revalidated exact file binding."""
+    from civitmatrix.download_one import _existing_verified_bundle
+    from civitmatrix.indexer import cm_install_identity
+
+    identity = cm_install_identity(payload)
+    advertised = remote_blake3_from_file_info(file_info)
+    if identity is None or not advertised:
+        return payload
+    path = out_dir / f"{stem}.cm-info.json"
+    cached = load_cm_info(path)
+    receipt = (cached or {}).get('CivitMatrixAcceptance')
+    if (not isinstance(receipt, dict)
+            or receipt.get('advertisedBlake3') != str(advertised).upper()):
+        return payload
+    verified = _existing_verified_bundle(out_dir, {'path': path, 'stem': stem},
+                                         identity, advertised)
+    if verified is None:
+        return payload
+    cached, actual = verified
+    receipt = cached.get('CivitMatrixAcceptance')
+    if (not isinstance(receipt, dict) or str(actual).upper() == str(advertised).upper()
+            or receipt.get('advertisedBlake3') != str(advertised).upper()):
+        return payload
+    return {**payload, 'Hashes': {**(payload.get('Hashes') or {}), 'BLAKE3': actual},
+            'CivitMatrixAcceptance': dict(receipt)}
 
 
 def _sidecar_incomplete(cm: dict[str, Any] | None) -> bool:
@@ -112,7 +143,7 @@ def _mark_hash_mismatch_kept(
 ) -> None:
     """Keep weight; record stale-remote-meta so heal does not redownload forever."""
     from civitmatrix.logging_io import utc_now
-    from civitmatrix.sm_sidecars import civit_model_source_url
+    from civitmatrix.sm_sidecars import civit_model_source_url, preserve_cached_publisher
 
     if dry_run:
         return
@@ -130,6 +161,11 @@ def _mark_hash_mismatch_kept(
             )
         except Exception as e:
             log(f"HEAL hash-mismatch sidecar rebuild failed stem={stem}: {e!r}")
+    payload = preserve_cached_publisher(payload, [cm] if cm else [])
+    payload = _preserve_accepted_payload(out_dir, stem, payload, file_info)
+    if model is not None and payload.get("AuthorUsername") and not (model.get("creator") or {}).get("username"):
+        model = {**model, "creator": {**(model.get("creator") or {}),
+                                     "username": payload["AuthorUsername"]}}
     mid = payload.get("ModelId") or (model or {}).get("id")
     vid = payload.get("VersionId") or (version or {}).get("id")
     if not payload.get("SourceUrl"):
@@ -185,7 +221,7 @@ def _mark_remote_unavailable(
 ) -> None:
     """Keep the weight; write SourceUrl + flag so heal stops retrying forever."""
     from civitmatrix.logging_io import utc_now
-    from civitmatrix.sm_sidecars import civit_model_source_url
+    from civitmatrix.sm_sidecars import civit_model_source_url, preserve_cached_publisher
 
     if dry_run:
         return
@@ -198,6 +234,11 @@ def _mark_remote_unavailable(
             )
         except Exception as e:
             log(f"HEAL remote-gone sidecar rebuild failed stem={stem}: {e!r}")
+    payload = preserve_cached_publisher(payload, [cm] if cm else [])
+    payload = _preserve_accepted_payload(out_dir, stem, payload, file_info)
+    if model is not None and payload.get("AuthorUsername") and not (model.get("creator") or {}).get("username"):
+        model = {**model, "creator": {**(model.get("creator") or {}),
+                                     "username": payload["AuthorUsername"]}}
     mid = payload.get("ModelId") or (model or {}).get("id")
     vid = payload.get("VersionId") or (version or {}).get("id")
     if not payload.get("SourceUrl"):
@@ -299,11 +340,17 @@ def _write_cm_and_swarm(
     dry_run: bool,
     write_swarm: bool = False,
 ) -> None:
-    from civitmatrix.sm_sidecars import build_swarm_json
+    from civitmatrix.sm_sidecars import build_swarm_json, preserve_cached_publisher
 
     payload = build_cm_info(
         model, version, file_info, stem, out_dir, base_url=base_url
     )
+    cached = load_cm_info(out_dir / f"{stem}.cm-info.json")
+    payload = preserve_cached_publisher(payload, [cached] if cached else [])
+    payload = _preserve_accepted_payload(out_dir, stem, payload, file_info)
+    if payload.get("AuthorUsername") and not (model.get("creator") or {}).get("username"):
+        model = {**model, "creator": {**(model.get("creator") or {}),
+                                     "username": payload["AuthorUsername"]}}
     if preview is not None:
         payload["ThumbnailImageUrl"] = str(preview)
     _write_sidecar(out_dir / f"{stem}.cm-info.json", payload, dry_run=dry_run)
@@ -396,6 +443,8 @@ def heal_library(
     cancel_check: Callable[[], bool] | None = None,
     pause_wait: Callable[[], bool] | None = None,
     allow_deletions: bool = False,
+    library_cleanup: bool = True,
+    keep_old_versions: bool = False,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     diag = index_diagnostics(out_dir)
@@ -418,16 +467,23 @@ def heal_library(
             job.set_count(key, counts[key])
             job.set_count("processed", sum(counts.values()))
 
-    for cand in collapse_stem_collisions(out_dir, dry_run=dry_run, allow_delete=allow_deletions):
+    cleanup = cleanup_working_library(
+        out_dir, keep_old_versions=keep_old_versions, dry_run=dry_run,
+        log=log, cancel_check=cancel_check,
+    ) if library_cleanup else []
+    for cand in cleanup:
         extra = str(cand.get("stem"))
         keep = cand.get("keepStem")
         deleted = bool(cand.get("deleted"))
-        action = "collapsed" if deleted else "proposed duplicate"
+        superseded = cand["kind"] == "superseded"
+        action = ("pruned old revision" if superseded else "collapsed") if deleted else "proposed cleanup"
+        event = ("heal_pruned_old_version" if superseded else "heal_collapsed_duplicate") if deleted else (
+            "heal_superseded_proposed" if superseded else "heal_duplicate_proposed")
         log(f"HEAL {action} stem={extra} keep={keep}")
-        bump("heal_collapsed_duplicate" if deleted else "heal_duplicate_proposed")
+        bump(event)
         if job:
             job.emit(
-                "heal_collapsed_duplicate" if deleted else "heal_duplicate_proposed",
+                event,
                 stem=extra,
                 keepStem=keep,
                 versionId=cand.get("versionId"),

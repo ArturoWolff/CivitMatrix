@@ -71,11 +71,11 @@ CivitMatrix builds `(ModelId, BaseModel) → max local VersionId` from recursive
 |-------------|--------|
 | ModelId not installed | `skip_not_installed` |
 | Remote picked version ≤ local max | `skip_uptodate` |
-| Remote picked version newer | download and preserve historical versions by default |
+| Remote picked version newer | download, verify, then replace proven superseded same-item revisions by default |
 
 Job meta includes `updateOnly: true`.
 
-Optional pruning requires both `--prune-old-versions` and `--allow-deletions`, a verified survivor and the same publisher/base scope. Distinct releases are not duplicates; duplicate cleanup requires matching author, version, file identity and actual BLAKE3.
+Normal library cleanup requires a verified survivor, matching publisher/base/file-variant scope and genuine same-item revision evidence. Collection characters, alternate branches and uncertain matches are preserved; a larger version ID alone never authorizes deletion. Verified same-release clones are also removed by default using matching author/version/file identity and actual BLAKE3. Use `--keep-old-versions` to opt into archiving or `--no-library-cleanup` to disable automatic cleanup. Broader orphan/temp removal and damaged-weight replacement still require `--allow-deletions`.
 
 ## Parity check
 

@@ -7,7 +7,7 @@ import re
 import stat
 import threading
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from civitmatrix.hash_blake3 import file_blake3_hex
 from civitmatrix.indexer import (
@@ -19,6 +19,7 @@ from civitmatrix.indexer import (
     weight_path_for_stem,
 )
 from civitmatrix.preview_media import iter_preview_paths
+from civitmatrix.release_policy import proven_supersession_reason
 
 
 def iter_model_sidecars(
@@ -79,9 +80,12 @@ def _keep_collision_rank(
 def _verified_identity(out_dir: Path, stem: str, data: dict[str, Any]):
     """Complete publisher/file identity backed by the actual local payload."""
     try:
+        if any(part.casefold() in {'my loras', 'myloras'}
+               for part in (out_dir / stem).resolve().parts):
+            return None
         info_path = out_dir / f"{stem}.cm-info.json"
         info_stat = info_path.lstat()
-        if not stat.S_ISREG(info_stat.st_mode):
+        if not stat.S_ISREG(info_stat.st_mode) or info_stat.st_nlink != 1:
             return None
         info_bytes = info_path.read_bytes()
         current = json.loads(info_bytes)
@@ -101,7 +105,7 @@ def _verified_identity(out_dir: Path, stem: str, data: dict[str, Any]):
         if sum((out_dir / f"{stem}{ext}").is_file() for ext in WEIGHT_EXTENSIONS) != 1:
             return None
         weight_stat = wp.lstat()
-        if not stat.S_ISREG(weight_stat.st_mode):
+        if not stat.S_ISREG(weight_stat.st_mode) or weight_stat.st_nlink != 1:
             return None
         actual = file_blake3_hex(wp).upper()
         def unchanged(before, after):
@@ -135,6 +139,37 @@ def _verified_current_bundle(out_dir: Path, stem: str):
         return None
 
 
+def _verified_pair_unchanged(out_dir: Path, first, second) -> bool:
+    """Bind BOTH bundles across both hash reads, including all weight variants.
+
+    Rehashing one bundle can take long enough for the already-checked partner
+    to change. Independent successful reads are not a stable deletion boundary.
+    """
+    def binding(stem):
+        paths = [out_dir / f'{stem}.cm-info.json']
+        paths.extend(out_dir / f'{stem}{ext}' for ext in WEIGHT_EXTENSIONS)
+        result = []
+        for path in paths:
+            try:
+                current = path.lstat()
+            except FileNotFoundError:
+                result.append(None)
+            else:
+                result.append((current.st_dev, current.st_ino, current.st_mode,
+                               current.st_nlink, current.st_size,
+                               current.st_mtime_ns, current.st_ctime_ns))
+        return tuple(result)
+    try:
+        bundles = (first, second)
+        before = [binding(stem) for stem, _, _ in bundles]
+        if any(expected is None or _verified_identity(out_dir, stem, data) != expected
+               for stem, data, expected in bundles):
+            return False
+        return before == [binding(stem) for stem, _, _ in bundles]
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def collapse_stem_collisions(
     out_dir: Path,
     model_id: int | None = None,
@@ -147,6 +182,7 @@ def collapse_stem_collisions(
     keep_stem: str | None = None,
     dry_run: bool = False,
     allow_delete: bool = False,
+    sidecars: Iterable[tuple[Path, dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Propose exact duplicate bundles; deleting needs explicit authorization.
 
@@ -154,7 +190,8 @@ def collapse_stem_collisions(
     Unknown identity or bytes inconsistent with metadata means preserve.
     """
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for info_path, data in iter_model_sidecars(out_dir, recursive=True):
+    rows = sidecars if sidecars is not None else iter_model_sidecars(out_dir, recursive=True)
+    for info_path, data in rows:
         stem = relative_pair_stem(out_dir, info_path, cm_info=True)
         try:
             mid, vid = int(data.get("ModelId")), int(data.get("VersionId"))
@@ -165,11 +202,16 @@ def collapse_stem_collisions(
         if version_id is not None and vid != int(version_id):
             continue
         # Only hash candidate collision groups, not every unrelated large model.
-        key = (mid, vid, _stem_parent_key(stem), collision_base_name(stem, vid).lower())
+        identity = cm_install_identity(data)
+        if identity is None:
+            continue
+        key = (identity, json.dumps(data.get("FileMetadata"), sort_keys=True),
+               data.get("RemoteFileType"), data.get("FileType"))
         groups.setdefault(key, []).append({"stem": stem, "modelId": mid,
             "versionId": vid, "infoPath": info_path, "data": data, "hasWeight": True})
     candidates: list[dict[str, Any]] = []
-    for (_, vid, _, _), items in groups.items():
+    for (identity, _, _, _), items in groups.items():
+        vid = identity[1]
         if len(items) < 2:
             continue
         verified: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -188,10 +230,11 @@ def collapse_stem_collisions(
                 candidate.update(keepStem=keep["stem"], deleted=False)
                 if allow_delete and not dry_run:
                     # Recheck survivor immediately before any destructive operation.
-                    if (_verified_identity(out_dir, keep["stem"], keep["data"]) != expected
-                            or _verified_identity(out_dir, item["stem"], item["data"]) != expected):
+                    if not _verified_pair_unchanged(out_dir,
+                            (keep['stem'], keep['data'], expected),
+                            (item['stem'], item['data'], expected)):
                         continue
-                    delete_stem_bundle(out_dir, item["stem"])
+                    delete_stem_bundle(out_dir, item["stem"], preserve_temps=True)
                     if (out_dir / f'{item["stem"]}.cm-info.json').exists():
                         continue
                     candidate["deleted"] = True
@@ -223,10 +266,10 @@ def find_prune_candidates(
             continue
         verified = _verified_identity(out_dir, stem, data)
         if verified is not None:
-            survivors.append((stem, verified))
+            survivors.append((stem, verified, data))
     # An unscoped mixed-base survivor set does not authorize a cleanup.
     scopes = {(v[0], v[2], v[3], v[4], v[7], v[10])
-              for _, (v, _) in survivors}
+              for _, (v, _), _ in survivors}
     if len(scopes) != 1:
         return []
     scope = next(iter(scopes))
@@ -238,34 +281,42 @@ def find_prune_candidates(
         except (TypeError, ValueError):
             continue
         stem = relative_pair_stem(out_dir, path, cm_info=True)
+        matches = [(keep, result, keep_data, reason)
+                   for keep, result, keep_data in survivors
+                   if (reason := proven_supersession_reason(data, keep_data))]
+        if not matches:
+            continue
         verified = _verified_identity(out_dir, stem, data)
         if verified is None:
             continue
         identity, actual = verified
         if (identity[0], identity[2], identity[3], identity[4], identity[7], identity[10]) != scope:
             continue
-        keep_stem_name, (keep_identity, keep_hash) = survivors[0]
+        keep_stem_name, (keep_identity, keep_hash), keep_data, reason = matches[0]
         candidates.append({"stem": stem, "versionId": identity[1], "blake3": actual,
                            "infoPath": path, "identity": identity,
                            "keepStem": keep_stem_name, "keepIdentity": keep_identity,
-                           "keepBlake3": keep_hash})
+                           "keepBlake3": keep_hash, "reason": reason,
+                           "data": data, "keepData": keep_data})
     return candidates
 
 
-def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
-    """Delete weight, cm-info, previews, and download temps for stem."""
+def delete_stem_bundle(out_dir: Path, stem: str, *, preserve_temps: bool = False) -> list[Path]:
+    """Delete bundle; automatic cleanup preserves all in-progress download files."""
     removed: list[Path] = []
-    paths: list[Path] = [
-        out_dir / f"{stem}.cm-info.json",
-        out_dir / f"{stem}.swarm.json",
-        out_dir / f"{stem}.preview.download",
-        out_dir / f"{stem}.preview.download.partial",
-    ]
+    weights = [out_dir / f"{stem}{ext}" for ext in WEIGHT_EXTENSIONS]
+    # Removing metadata first can orphan a weight when its unlink is denied.
+    # No companion is touched until all actual weight paths were removed.
+    paths: list[Path] = list(weights)
+    paths.extend([out_dir / f"{stem}.cm-info.json", out_dir / f"{stem}.swarm.json"])
     for ext in WEIGHT_EXTENSIONS:
-        paths.append(out_dir / f"{stem}{ext}")
-        paths.append(out_dir / f"{stem}{ext}.partial")
-        paths.append(out_dir / f"{stem}{ext}.heal-new")
-        paths.append(out_dir / f"{stem}{ext}.heal-new.partial")
+        if not preserve_temps:
+            paths.append(out_dir / f"{stem}{ext}.partial")
+            paths.append(out_dir / f"{stem}{ext}.heal-new")
+            paths.append(out_dir / f"{stem}{ext}.heal-new.partial")
+    if not preserve_temps:
+        paths.extend([out_dir / f"{stem}.preview.download",
+                      out_dir / f"{stem}.preview.download.partial"])
     wp = weight_path_for_stem(out_dir, stem)
     if wp is not None and wp not in paths:
         paths.append(wp)
@@ -278,6 +329,8 @@ def delete_stem_bundle(out_dir: Path, stem: str) -> list[Path]:
                 p.unlink(missing_ok=True)
                 removed.append(p)
         except OSError:
+            if p in weights:
+                return removed
             continue
     return removed
 
@@ -306,11 +359,11 @@ def prune_old_versions(
     pruned: list[dict[str, Any]] = []
     for cand in candidates:
         stem = str(cand["stem"])
-        if (_verified_current_bundle(out_dir, stem) != (cand["identity"], cand["blake3"])
-                or _verified_current_bundle(out_dir, cand["keepStem"])
-                != (cand["keepIdentity"], cand["keepBlake3"])):
+        if not _verified_pair_unchanged(out_dir,
+                (stem, cand['data'], (cand['identity'], cand['blake3'])),
+                (cand['keepStem'], cand['keepData'], (cand['keepIdentity'], cand['keepBlake3']))):
             continue
-        delete_stem_bundle(out_dir, stem)
+        delete_stem_bundle(out_dir, stem, preserve_temps=True)
         info = out_dir / f"{stem}.cm-info.json"
         if info.exists():
             continue

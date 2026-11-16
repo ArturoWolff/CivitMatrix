@@ -157,11 +157,11 @@ No API key needed for these:
 python -m civitmatrix.maintenance /path/to/Models
 python -m civitmatrix.maintenance /path/to/Models --civit --apply
 
-# Heal preserves existing weights and duplicate bundles by default
+# Heal removes verified clones and proven superseded same-item revisions
 # Fix incomplete sidecars / orphans in an existing library
 ./run.sh --cli --heal --dry-run
 ./run.sh --cli --heal
-# Cleanup requires a reviewed, explicitly authorized --allow-deletions run
+# --keep-old-versions opts into archiving; --no-library-cleanup disables automatic cleanup
 
 # Sort into characters/ styles/ concepts/ clothes/ uncategorized/ (dry-run; add --apply to move)
 ./run.sh --cli --categorize
@@ -202,11 +202,15 @@ Deep dive: [docs/STABILITY-MATRIX.md](docs/STABILITY-MATRIX.md)
 | `logs/cancel.request` / `pause.request` | Flags written by `--cancel` / `--pause` |
 | `<out>/.civitmatrix.lock` | Status for a kernel-held writer lease; retained after release |
 
-On start of a real run (after lock), preview download temps and leftover `*.heal-new.partial` are purged recursively; **weight** `*.safetensors.partial` / `*.gguf.partial` / `*.sft.partial` are kept and **HTTP Range-resumed** on the next download (`download_resume` event). `--dry-run` does not delete temps. Use `--no-resume-partials` to force a full re-get. `--keep-partials` also keeps preview temps.
+Preview/temp purging requires `--allow-deletions`; normal library cleanup does not authorize orphan removal, partial removal or damaged-weight replacement. **Weight** `*.safetensors.partial` / `*.gguf.partial` / `*.sft.partial` are kept for HTTP Range resume. `--dry-run` never deletes. Use `--no-resume-partials` to force a full re-get; `--keep-partials` also keeps preview temps.
 
 Catalog processing is **streamed**: models are submitted to the worker pool as listing pages arrive (no full catalog in RAM). Complete local installs with matching publisher, version and file identity are skipped on restart. The recursive scan follows directory aliases once, including libraries on another drive. Equal hashes across different releases or authors do not collapse those releases.
 
-Historical versions are preserved by default. A skip never prunes files. Optional older-version cleanup requires both `--prune-old-versions` and `--allow-deletions`, a verified survivor, and matching publisher/base scope. Duplicate cleanup requires the same author, model/version/file identity and actual BLAKE3 payload, and also requires explicit deletion authorization. Missing or conflicting identities are preserved. The UI does not authorize cleanup deletions.
+When the selected API record has no publisher name, a restart can still reuse its exact uploaded file: model/version/file IDs, supported file-variant metadata and freshly computed SHA256 **and** BLAKE3 must match the selected record. Conflicting publisher evidence, unsupported variant fields and malformed file types refuse this fallback. This `skip_source` path neither invents a publisher nor authorizes pruning or stale-hash receipts.
+
+Stale advertised hashes use identity-bound acceptance receipts rather than repeated copies. Reuse verifies the selected local bytes; strong remote validators detect payload changes when available. Without a usable validator, acceptance expires after 24 hours and requires a fresh verified download. Silent remote changes can remain undetected until that refresh. `--skip-verify` disables automatic model cleanup as well as post-download verification.
+
+The default is a working collection, not an archive: verified same-release clones are removed and a verified newer genuine revision replaces its superseded predecessor. This requires matching publisher/base/file-variant scope and actual same-item revision evidence, not just a larger version ID. Different characters on collection pages, alternate variants and unknown provenance are preserved. Duplicate cleanup requires complete matching author/model/version/file identity and computed payload equality, including renamed copies. Failed, pending or unverified downloads never authorize cleanup. `--keep-old-versions` opts into archiving; `--no-library-cleanup` disables automatic model cleanup. Additional orphan/temp cleanup and existing-weight repair still require `--allow-deletions`.
 
 **Listing cache (opt-in):** `--use-listing-cache` reuses a complete page cache under `logs/listing-cache/` for the current filters; default runs always re-list. `--refresh-listing` forces a fresh API list (and rewrites the cache when caching is on).
 

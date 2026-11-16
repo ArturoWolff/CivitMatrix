@@ -289,18 +289,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--keep-old-versions",
         action="store_true",
-        default=True,
-        help="Preserve historical versions (the default)",
+        default=None,
+        help="Opt in to archiving superseded releases (verified clones still collapse)",
     )
     p.add_argument(
         "--prune-old-versions",
         dest="keep_old_versions",
         action="store_false",
-        help="Request older-version pruning (also requires --allow-deletions)",
+        default=None,
+        help="Keep only the newest proven same-item revision (the default)",
+    )
+    p.add_argument(
+        "--library-cleanup", action=argparse.BooleanOptionalAction, default=None,
+        help="Remove verified clones and proven superseded revisions (default: on; unknown matches stay)",
     )
     p.add_argument(
         "--allow-deletions", action="store_true",
-        help="Explicitly authorize cleanup deletions for this CLI run",
+        help="Authorize additional orphan/temp cleanup and existing-weight replacement",
     )
     p.add_argument(
         "--update-only",
@@ -589,6 +594,8 @@ def _main(argv: list[str] | None = None) -> int:
             return list(value)
         return parse_csv_list(value)
 
+    library_cleanup = bool(resolve(args.library_cleanup, "libraryCleanup", True))
+    keep_old_versions = bool(resolve(args.keep_old_versions, "keepOldVersions", False))
     base_model = str(resolve(args.base_model, "baseModel", os.environ.get("BASE_MODEL", "Anima")))
     model_type = str(resolve(args.model_type, "type", os.environ.get("MODEL_TYPE", "LORA")))
     sort = str(resolve(args.sort, "sort", os.environ.get("SORT", "Highest Rated")))
@@ -682,6 +689,8 @@ def _main(argv: list[str] | None = None) -> int:
             refresh_sidecars=bool(args.refresh_sidecars),
             write_swarm=write_swarm,
             allow_deletions=bool(args.allow_deletions),
+            library_cleanup=library_cleanup,
+            keep_old_versions=keep_old_versions,
         )
     return run_batch(
         client=client,
@@ -702,8 +711,9 @@ def _main(argv: list[str] | None = None) -> int:
         use_listing_cache=bool(args.use_listing_cache),
         refresh_listing=bool(args.refresh_listing),
         disk_floor_gib=disk_floor_gib,
-        keep_old_versions=bool(args.keep_old_versions),
+        keep_old_versions=keep_old_versions,
         allow_deletions=bool(args.allow_deletions),
+        library_cleanup=library_cleanup,
         tag_include=tag_include,
         tag_exclude=tag_exclude,
         category=category,

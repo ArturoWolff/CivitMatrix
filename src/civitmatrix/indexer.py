@@ -238,6 +238,10 @@ def cm_install_identity(data: dict[str, Any]) -> tuple[Any, ...] | None:
             ("AuthorUsername", "BaseModel", "ModelType", "RemoteFileName"))
         if any(not isinstance(v, str) or not v.strip() for v in (author, base, kind, name)):
             return None
+        for field in ('RemoteFileType', 'FileType'):
+            value = data.get(field)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                return None
         metadata = data.get("FileMetadata")
         if (not isinstance(metadata, dict)
                 or not isinstance(metadata.get("format"), str)
@@ -252,9 +256,74 @@ def cm_install_identity(data: dict[str, Any]) -> tuple[Any, ...] | None:
         return None
 
 
-def load_local_install_identities(out_dir: Path) -> dict[tuple[Any, ...], str]:
-    """Index complete install provenance without hashing the library at startup."""
-    identities = {}
+def cm_source_record(data: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Exact publication candidate key, never installed/deletion authority."""
+    if not isinstance(data, dict) or type(data.get('Source')) is not int or data['Source'] != 0:
+        return None
+    # Optional type evidence may be absent/null, but never training data in a
+    # model-shaped trench coat. Validate before any candidate dictionary lookup.
+    for field in ('RemoteFileType', 'FileType'):
+        value = data.get(field)
+        if value is not None and (not isinstance(value, str) or value != 'Model'):
+            return None
+    ids = []
+    for field in ('ModelId', 'VersionId', 'RemoteFileId'):
+        value = data.get(field)
+        if not (type(value) is int or isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value)):
+            return None
+        if int(value) <= 0:
+            return None
+        ids.append(int(value))
+    fields = [data.get(k) for k in ('RemoteFileName', 'BaseModel', 'ModelType')]
+    meta = data.get('FileMetadata')
+    # Unknown variant knobs are not decoration; same bytes are no damn proof
+    # that a different publication was requested. Only the API's literal False
+    # endpoint default is inert; 0 and "false" don't get a fake moustache.
+    if not isinstance(meta, dict) or set(meta) - {'format', 'fp', 'size', 'isRequired'}:
+        return None
+    if 'isRequired' in meta and meta['isRequired'] is not False:
+        return None
+    fields.append(meta.get('format'))
+    if any(not isinstance(v, str) or not v.strip() for v in fields):
+        return None
+    # Missing/null optional variant evidence stays unknown, not a guessed bf16.
+    # Keep the slots: unknown versus known must still be different damn keys.
+    optional = [meta.get(k) for k in ('fp', 'size')]
+    if any(v is not None and (not isinstance(v, str) or not v.strip()) for v in optional):
+        return None
+    fields.extend(optional)
+    name = str(fields[0])
+    if Path(name).name != name or '/' in name or '\\' in name or not is_indexed_weight_name(name):
+        return None
+    return (*ids, *fields)
+
+
+class LocalInstallIdentities(dict):
+    """All payload revisions and their cheaply indexed complete bundle records."""
+
+    def __init__(self):
+        super().__init__()
+        self.records: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        # Candidates are not receipts. No publisher-shaped fake moustache here.
+        self.source_records: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+
+    def add_source_bundle(self, path, stem, data):
+        key = cm_source_record(data)
+        if key is not None:
+            rows = self.source_records.setdefault(key, [])
+            rows[:] = [row for row in rows if row['path'] != path]
+            rows.append({'path': path, 'stem': stem, 'data': data})
+
+    def add_bundle(self, identity, digest, path, stem, data):
+        self.setdefault(identity, set()).add(digest)
+        rows = self.records.setdefault(identity, [])
+        rows[:] = [row for row in rows if row['path'] != path]
+        rows.append({'path': path, 'stem': stem, 'data': data})
+
+
+def load_local_install_identities(out_dir: Path) -> LocalInstallIdentities:
+    """Index every complete revision without hashing payloads at startup."""
+    identities = LocalInstallIdentities()
     for path in iter_cm_info_paths(out_dir, recursive=True):
         stem = relative_pair_stem(out_dir, path, cm_info=True)
         weight = weight_path_for_stem(out_dir, stem)
@@ -264,11 +333,12 @@ def load_local_install_identities(out_dir: Path) -> dict[tuple[Any, ...], str]:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 continue
+            identities.add_source_bundle(path, stem, data)
             identity = cm_install_identity(data)
             hashes = data.get("Hashes")
             digest = hashes.get("BLAKE3") if isinstance(hashes, dict) else None
             if identity is not None and digest:
-                identities[identity] = str(digest).upper()
+                identities.add_bundle(identity, str(digest).upper(), path, stem, data)
         except (OSError, ValueError, TypeError):
             continue
     return identities
